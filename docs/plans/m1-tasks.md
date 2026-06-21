@@ -75,10 +75,11 @@ commit/push are outstanding.
 - [x] `cargo test --workspace` green; `cargo fmt --check` + clippy
       (`-D warnings`) clean; `npm run typecheck && npm run build` green; Tauri
       shell `cargo build -p iberalign` green.
-- [ ] User smoke: `npm run tauri dev` → Open file → summary shows. (GUI can't be
-      driven from this environment.)
-- [ ] Batch-end ritual: commit (Conventional Commits) and push; confirm CI
-      green. (Docs + `CLAUDE.md` + memory updated.)
+- [x] User smoke: user loaded a real FASTA via the dialog — surfaced the
+      "Aligned" → "Equal width" relabel (see post-smoke note). Summary shows.
+- [x] Batch-end ritual: committed (`301c561`) + pushed to `main`; CI green on
+      both jobs (Windows desktop build + ubuntu engine/frontend). Docs +
+      `CLAUDE.md` + memory updated.
 
 ## Post-smoke fix — "Aligned" → "Equal width"
 
