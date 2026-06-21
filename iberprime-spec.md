@@ -226,6 +226,22 @@ Nucleotide scheme; protein schemes (Clustal, Zappo, hydrophobicity); **color‑b
 ### Interactions
 Pan (drag / wheel‑scroll), zoom (ctrl/⌘‑wheel or pinch), selection (cell / column / row / rectangular range), hover tooltip (sequence name, ungapped position, residue), copy selection to clipboard (as FASTA or raw block).
 
+**Position readout (status bar).** For the cell under the cursor (and the active
+selection), surface *two* coordinates side by side, because gapped width and
+ungapped length are different things and the literature always cites the
+gap‑free one:
+- the **alignment column** — index into the gapped matrix; and
+- the **ungapped position within the selected sequence** — gaps excluded (the
+  coordinate biologists quote).
+
+A planned third coordinate is **reference‑relative**: an offset from a
+user‑chosen origin (e.g. "position 1 = this site"). These are exactly the three
+coordinate spaces of §4. *Open question for M2:* whether the "absolute"
+coordinate is the raw column index (`1..=width`) or a position counted *along a
+chosen reference sequence* — the two diverge when that sequence carries leading
+gaps. Ungapped positions already exclude leading **and** trailing gaps, so the
+per‑sequence readout is correct regardless.
+
 ### Difference mode
 Pick a **reference** (a chosen sequence or the consensus). Matches are dimmed or shown as a dot (`.`, the Clustal convention); mismatches are highlighted. For "selected few," restrict to the selection and recompute consensus/diff within just that subset.
 

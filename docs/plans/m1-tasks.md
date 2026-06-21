@@ -93,6 +93,14 @@ UI ("Equal width"); the UI appends "(gap-padded)" when width is uniform but
 ungapped lengths differ. Detecting a *good* alignment from data alone is out of
 scope.
 
+**Follow-up (2026-06-21):** at the user's request the summary labels were made
+explicit — `Lengths` → `Ungapped length (no gaps)`, `Width` → `Aligned width
+(with gaps)` (GUI table + `align-cli summary`), so the gap-free literature
+length is never confused with the gapped matrix width. The user's related M2
+idea — a status-bar **position readout** showing the alignment column *and* the
+ungapped position of the selected sequence, plus a future reference-relative
+coordinate — is captured in `iberprime-spec.md` §6 (Interactions).
+
 ## Deferred (not M1)
 
 - Edit `apply(cmd)`/`apply(inverse)` proptest → **M5** (edit→undo→redo lossless;

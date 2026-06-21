@@ -86,13 +86,13 @@ export default function App() {
               <td>{summary.alphabet}</td>
             </tr>
             <tr>
-              <th>Lengths</th>
+              <th>Ungapped length (no gaps)</th>
               <td>
                 {summary.minLen}..{summary.maxLen}
               </td>
             </tr>
             <tr>
-              <th>Width</th>
+              <th>Aligned width (with gaps)</th>
               <td>{summary.width}</td>
             </tr>
             <tr>

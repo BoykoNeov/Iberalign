@@ -44,11 +44,11 @@ fn summary(bytes: &[u8]) -> ExitCode {
     match align_core::parse_fasta(bytes) {
         Ok(out) => {
             let s = align_core::summarize(&out.records);
-            println!("sequences  : {}", s.count);
-            println!("alphabet   : {}", s.alphabet.label());
-            println!("lengths    : {}..{}", s.min_len, s.max_len);
-            println!("width      : {}", s.width);
-            println!("equal width: {}", if s.equal_width { "yes" } else { "no" });
+            println!("sequences    : {}", s.count);
+            println!("alphabet     : {}", s.alphabet.label());
+            println!("ungapped len : {}..{}", s.min_len, s.max_len);
+            println!("aligned width: {}", s.width);
+            println!("equal width  : {}", if s.equal_width { "yes" } else { "no" });
             for w in &out.warnings {
                 eprintln!("warning: {w}");
             }
