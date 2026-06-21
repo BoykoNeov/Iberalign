@@ -2,13 +2,13 @@
 //! state behind a `Mutex`. The frontend keeps only a render-buffer copy; this
 //! is the single source of truth (see spec §3).
 
-use align_core::Sequence;
+use align_core::Dataset;
 
-/// Everything the backend owns for the current session. Starts empty; an
-/// `Alignment` and the undo/redo command stack land here in later milestones.
+/// Everything the backend owns for the current session. Starts empty; the
+/// undo/redo command stack lands here in M5.
 #[derive(Default)]
 pub struct AppState {
-    /// The most recently loaded sequences (pre-alignment). Placeholder until
-    /// the `Alignment` + edit stack arrive in M1/M5.
-    pub sequences: Vec<Sequence>,
+    /// The most recently loaded dataset (the gapped `Alignment` plus its
+    /// derived ungapped `Sequence`s), or `None` before anything is loaded.
+    pub dataset: Option<Dataset>,
 }

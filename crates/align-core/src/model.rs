@@ -5,6 +5,7 @@
 //! pixel). This module owns the first two; the coordinate mapping lives in
 //! [`crate::coords`]. Screen pixels are a render-layer concern (frontend).
 
+use crate::coords::is_gap;
 use std::cell::OnceCell;
 
 /// Sequence alphabet. Inferred at parse time, overridable by the user.
@@ -24,6 +25,59 @@ impl Alphabet {
             Alphabet::Protein => "Protein",
         }
     }
+
+    /// The more general of two alphabets (`Protein` > `Rna` > `Dna`), so a
+    /// mixed set is described by its most general member.
+    pub fn widen(self, other: Alphabet) -> Alphabet {
+        use Alphabet::*;
+        match (self, other) {
+            (Protein, _) | (_, Protein) => Protein,
+            (Rna, _) | (_, Rna) => Rna,
+            _ => Dna,
+        }
+    }
+
+    /// Infer an alphabet from residue composition. The analysis boundary
+    /// normalizes case, so soft-masked (lowercase) input classifies the same
+    /// as uppercase. Heuristic: if ≥90% of letters look nucleic it's a nucleic
+    /// acid, and a `U` without a `T` marks RNA; otherwise protein.
+    pub fn infer(residues: &[u8]) -> Alphabet {
+        let mut nucleic = 0usize;
+        let mut letters = 0usize;
+        let mut has_u = false;
+        let mut has_t = false;
+        for &b in residues {
+            let c = b.to_ascii_uppercase();
+            if !c.is_ascii_alphabetic() {
+                continue; // ignore gaps, '*', etc. for inference
+            }
+            letters += 1;
+            match c {
+                b'A' | b'C' | b'G' | b'T' | b'U' | b'N' => {
+                    nucleic += 1;
+                    has_u |= c == b'U';
+                    has_t |= c == b'T';
+                }
+                // Common nucleotide IUPAC ambiguity codes.
+                b'R' | b'Y' | b'S' | b'W' | b'K' | b'M' | b'B' | b'D' | b'H' | b'V' => {
+                    nucleic += 1;
+                }
+                _ => {}
+            }
+        }
+        if letters == 0 {
+            return Alphabet::Dna;
+        }
+        if nucleic * 10 >= letters * 9 {
+            if has_u && !has_t {
+                Alphabet::Rna
+            } else {
+                Alphabet::Dna
+            }
+        } else {
+            Alphabet::Protein
+        }
+    }
 }
 
 /// Stable identifier for a sequence within one loaded alignment.
@@ -36,7 +90,10 @@ pub struct Sequence {
     pub name: String,
     pub description: String,
     pub alphabet: Alphabet,
-    /// Ungapped residues, uppercase ASCII; IUPAC ambiguity codes allowed.
+    /// Ungapped residues, ASCII; IUPAC ambiguity codes and `*` stop codons
+    /// allowed. **Original case is preserved** — lowercase soft-masking is
+    /// data; analyses normalize case at their own boundary (see
+    /// [`Alphabet::infer`]), never here.
     pub residues: Vec<u8>,
 }
 
@@ -123,5 +180,67 @@ impl Alignment {
     pub fn invalidate_caches(&mut self) {
         self.consensus = OnceCell::new();
         self.conservation = OnceCell::new();
+    }
+}
+
+/// A parsed FASTA record, before alignment construction.
+///
+/// `gapped` is the record's literal residue/gap stream as it appeared in the
+/// file, with two normalizations applied at the parse boundary: `.` gaps are
+/// rewritten to `b'-'` (so a gap is always `b'-'` in memory), and interior
+/// whitespace is stripped. **Original residue case is preserved.** The ungapped
+/// [`Sequence`] is *derived* from this stream by [`Dataset::from_records`] — it
+/// is not the primary artifact.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawRecord {
+    pub name: String,
+    pub description: String,
+    pub gapped: Vec<u8>,
+}
+
+/// A loaded dataset: the gapped [`Alignment`] plus the per-row ungapped
+/// [`Sequence`]s it references by `seq_id` (aligned by index — `sequences[i]`
+/// is `rows[i]`). The frontend renders the alignment; features and analyses
+/// anchor to the sequences.
+#[derive(Debug, Default)]
+pub struct Dataset {
+    pub alignment: Alignment,
+    pub sequences: Vec<Sequence>,
+}
+
+impl Dataset {
+    /// Build a dataset from parsed records.
+    ///
+    /// Each row is padded to the widest record by **appending trailing gaps
+    /// only** — already-aligned (equal-length) input is padded not at all, and
+    /// ragged input is left-justified. Interior gaps are never stripped or
+    /// moved: doing so would silently destroy an existing alignment
+    /// (`ACGT-AC` / `AC-GTAC` must *not* both collapse to `ACGTAC`). The
+    /// ungapped `Sequence.residues` are derived per row, with case preserved.
+    pub fn from_records(records: &[RawRecord]) -> Self {
+        let width = records.iter().map(|r| r.gapped.len()).max().unwrap_or(0);
+        let mut sequences = Vec::with_capacity(records.len());
+        let mut rows = Vec::with_capacity(records.len());
+        for (i, rec) in records.iter().enumerate() {
+            let id = i as SeqId;
+            // Pad to common width with trailing gaps; never touch interior cells.
+            let mut gapped = rec.gapped.clone();
+            gapped.resize(width, b'-');
+            // Derive the ungapped residues (case preserved).
+            let residues: Vec<u8> = rec.gapped.iter().copied().filter(|&b| !is_gap(b)).collect();
+            let alphabet = Alphabet::infer(&residues);
+            sequences.push(Sequence {
+                id,
+                name: rec.name.clone(),
+                description: rec.description.clone(),
+                alphabet,
+                residues,
+            });
+            rows.push(AlignedRow::new(id, gapped));
+        }
+        Dataset {
+            alignment: Alignment::from_rows(rows),
+            sequences,
+        }
     }
 }

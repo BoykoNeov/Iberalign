@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { parseSummary, type Summary } from "../ipc/commands";
+import { open } from "@tauri-apps/plugin-dialog";
+import { loadAlignment, parseSummary, type Summary } from "../ipc/commands";
 import "./App.css";
 
 // A tiny embedded sample so the M0 IPC round-trip is exercisable without a
@@ -29,12 +30,33 @@ export default function App() {
     }
   }
 
+  async function onOpenFile() {
+    setError(null);
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: "FASTA", extensions: ["fasta", "fa", "fna", "faa", "fas", "txt"] },
+        ],
+      });
+      // `null` when the user cancels the dialog.
+      if (typeof selected === "string") {
+        setSummary(await loadAlignment(selected));
+      }
+    } catch (e) {
+      setSummary(null);
+      setError(String(e));
+    }
+  }
+
   return (
     <main className="container">
       <h1>Iberalign</h1>
       <p className="subtitle">
-        Multiple sequence alignment viewer/editor — M0 scaffold. The summary
-        below is computed by the native Rust core over Tauri IPC.
+        Multiple sequence alignment viewer/editor. Open a FASTA file (read by
+        the native Rust core), or paste below and parse — the summary is
+        computed in Rust over Tauri IPC.
       </p>
 
       <textarea
@@ -47,6 +69,7 @@ export default function App() {
 
       <div className="actions">
         <button onClick={onParse}>Parse FASTA</button>
+        <button onClick={onOpenFile}>Open file…</button>
       </div>
 
       {error && <p className="error">Error: {error}</p>}
@@ -69,11 +92,28 @@ export default function App() {
               </td>
             </tr>
             <tr>
-              <th>Aligned</th>
-              <td>{summary.equalLength ? "yes" : "no"}</td>
+              <th>Width</th>
+              <td>{summary.width}</td>
+            </tr>
+            <tr>
+              <th>Equal width</th>
+              <td>
+                {summary.equalWidth ? "yes" : "no"}
+                {summary.equalWidth && summary.minLen !== summary.maxLen
+                  ? " (gap-padded)"
+                  : ""}
+              </td>
             </tr>
           </tbody>
         </table>
+      )}
+
+      {summary && summary.warnings.length > 0 && (
+        <ul className="warnings">
+          {summary.warnings.map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
       )}
     </main>
   );

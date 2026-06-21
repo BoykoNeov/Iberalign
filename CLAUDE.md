@@ -67,8 +67,15 @@ dependency-light and surface toolchain/linker issues fast.
 
 - **M0 scaffolding — done.** Workspace builds; tolerant FASTA parser + coordinate
   API (property-tested); `parse_summary` IPC round-trip; CI; public repo.
-- **M1 next** — full data model, messy-FASTA polish, `Alignment`, composition
-  stats, native file-open dialog. See `docs/plans/`.
+- **M1 model + parsing + coordinates — code complete, green.** Gap-preserving
+  parser (case-preserved, `.`→`-`, `ParseOutcome` warnings: dup-name/empty/
+  malformed); `Dataset::from_records` (trailing-pad-only invariant, derives
+  ungapped `Sequence`s); `Composition` stats + `align-cli composition`;
+  construction round-trip proptest; per-feature fixtures; `load_alignment(path)`
+  (Rust reads the file) + `dialog:allow-open` capability; "Open file…" UI.
+  Pending: manual GUI smoke + commit/push. See `docs/plans/m1-*`.
+- **M2 next** — rendering MVP: virtualized Canvas2D grid from the in-memory
+  buffer, pinned name column + ruler, nucleotide coloring, pan/zoom, minimap.
 
 ## Dev-docs
 

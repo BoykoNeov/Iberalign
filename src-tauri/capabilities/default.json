@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Baseline capability for the main window. Scoped narrowly; fs/dialog/shell permissions are added per-milestone as features land (spec §9).",
+  "description": "Baseline capability for the main window. Scoped narrowly; permissions are added per-milestone as features land (spec §9). `dialog:allow-open` (M1) lets the webview invoke the native open-file dialog; the file itself is read by the Rust `load_alignment` command, so no `fs` permission is needed.",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:allow-open"
   ]
 }

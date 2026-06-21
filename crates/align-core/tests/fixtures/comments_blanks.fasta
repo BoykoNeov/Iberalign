@@ -1,0 +1,11 @@
+; leading comment line
+
+>c1 first record
+
+ACGT
+; interior comment
+ACGT
+
+>c2
+
+TTTT

@@ -1,7 +1,8 @@
 //! `iberalign-cli` — headless front end over `align-core`.
 //!
 //! Usage:
-//!   iberalign-cli summary <file.fasta>   # print a load summary
+//!   iberalign-cli summary <file.fasta>       # print a load summary
+//!   iberalign-cli composition <file.fasta>   # print composition stats
 //!   cat file.fasta | iberalign-cli summary -
 //!
 //! Exists so the full parse → analyze → export path can be exercised in CI
@@ -15,6 +16,13 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("summary") => match read_input(args.get(1).map(String::as_str)) {
             Ok(bytes) => summary(&bytes),
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("composition") => match read_input(args.get(1).map(String::as_str)) {
+            Ok(bytes) => composition(&bytes),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
@@ -34,12 +42,47 @@ fn main() -> ExitCode {
 
 fn summary(bytes: &[u8]) -> ExitCode {
     match align_core::parse_fasta(bytes) {
-        Ok(seqs) => {
-            let s = align_core::summarize(&seqs);
-            println!("sequences : {}", s.count);
-            println!("alphabet  : {}", s.alphabet.label());
-            println!("lengths   : {}..{}", s.min_len, s.max_len);
-            println!("aligned   : {}", if s.equal_length { "yes" } else { "no" });
+        Ok(out) => {
+            let s = align_core::summarize(&out.records);
+            println!("sequences  : {}", s.count);
+            println!("alphabet   : {}", s.alphabet.label());
+            println!("lengths    : {}..{}", s.min_len, s.max_len);
+            println!("width      : {}", s.width);
+            println!("equal width: {}", if s.equal_width { "yes" } else { "no" });
+            for w in &out.warnings {
+                eprintln!("warning: {w}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("parse error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn composition(bytes: &[u8]) -> ExitCode {
+    match align_core::parse_fasta(bytes) {
+        Ok(out) => {
+            let ds = align_core::Dataset::from_records(&out.records);
+            let comp = align_core::Composition::of(&ds);
+            for (i, seq) in ds.sequences.iter().enumerate() {
+                println!(
+                    "seq {i:>3}  {:<20} len={:<6} gc={:.3}",
+                    seq.name, comp.lengths[i], comp.gc_content[i]
+                );
+            }
+            let rows = &comp.gap_fraction_per_row;
+            let mean_row_gap = if rows.is_empty() {
+                0.0
+            } else {
+                rows.iter().sum::<f32>() / rows.len() as f32
+            };
+            println!("columns       : {}", ds.alignment.width);
+            println!("mean row gap  : {mean_row_gap:.3}");
+            for w in &out.warnings {
+                eprintln!("warning: {w}");
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -62,5 +105,5 @@ fn read_input(path: Option<&str>) -> std::io::Result<Vec<u8>> {
 }
 
 fn usage() {
-    eprintln!("usage: iberalign-cli summary <file.fasta | ->");
+    eprintln!("usage: iberalign-cli <summary|composition> <file.fasta | ->");
 }
