@@ -14,9 +14,10 @@
 - [x] `.claude/settings.json` permission allowlist
 - [x] dev-docs (plan/context/tasks)
 - [x] Verified: fmt clean, clippy clean, workspace compiles+links, CLI correct
+- [x] git init (main) → first commit → public repo
+      (github.com/BoykoNeov/Iberalign) → push; **CI green** (both jobs)
 - [ ] Manual smoke (user): `npm run tauri dev` → click "Parse FASTA" → summary
       shows (GUI can't be driven from this environment)
-- [ ] git init → first commit → public repo → push
 
 ## Next (M1 — model + parsing + coordinates)
 
