@@ -1,0 +1,27 @@
+# Cargo workspace for Iberalign: the pure engine crates plus the Tauri shell.
+[workspace]
+resolver = "2"
+members = [
+    "crates/align-core",
+    "crates/align-cli",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+authors = ["Iberalign contributors"]
+repository = "https://github.com/BoykoNeov/Iberalign"
+description = "Cross-platform desktop viewer/editor for multiple sequence alignments (DNA/RNA/protein)."
+
+[workspace.dependencies]
+align-core = { path = "crates/align-core" }
+thiserror = "2"
+proptest = "1"
+
+# Thin release binaries; alignment work is CPU-bound so optimize.
+[profile.release]
+opt-level = 3
+lto = "thin"

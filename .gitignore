@@ -1,0 +1,33 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+
+# Node / frontend build
+node_modules/
+/dist/
+dist-ssr/
+*.local
+
+# Tauri generated
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+*.suo
+*.sw?
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local (personal) settings
+.claude/settings.local.json
+
+# Note: Cargo.lock and package-lock.json are committed on purpose (this is an
+# application, not a library), so they are NOT ignored.

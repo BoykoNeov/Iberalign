@@ -1,0 +1,21 @@
+Iberalign
+Copyright 2026 Iberalign contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------------
+Third-party components (permissive, redistributed as part of the build):
+  - thiserror (MIT OR Apache-2.0)          — align-core error types
+  - proptest  (MIT OR Apache-2.0, dev only) — property tests
+  - Tauri v2 and ecosystem (MIT OR Apache-2.0) — desktop shell
+  - React (MIT), Vite (MIT)                — frontend
+
+------------------------------------------------------------------------------
+External alignment tools are NOT bundled or linked. Iberalign detects and
+invokes them as separate processes only when the user has installed them:
+  - MAFFT          (BSD-like)  — default MSA engine, safe to bundle later
+  - MUSCLE v5      (GPL)       — invoke-only; never linked or redistributed
+  - Clustal Omega  (GPL)       — invoke-only; never linked or redistributed
+
+Keeping GPL tools as separate, user-installed processes keeps Iberalign's own
+code permissive. See iberprime-spec.md §11.

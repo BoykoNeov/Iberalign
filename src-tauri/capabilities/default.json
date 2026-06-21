@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline capability for the main window. Scoped narrowly; fs/dialog/shell permissions are added per-milestone as features land (spec §9).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

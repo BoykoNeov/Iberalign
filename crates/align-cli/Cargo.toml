@@ -1,0 +1,16 @@
+[package]
+name = "align-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Headless CLI over align-core — a scriptable integration harness for CI."
+
+[[bin]]
+name = "iberalign-cli"
+path = "src/main.rs"
+
+[dependencies]
+align-core.workspace = true

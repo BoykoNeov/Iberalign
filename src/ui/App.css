@@ -1,0 +1,95 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #0f0f0f;
+  background-color: #f6f6f6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+h1 {
+  margin-bottom: 0.25rem;
+}
+
+.subtitle {
+  color: #555;
+  margin-top: 0;
+}
+
+.fasta-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  padding: 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  resize: vertical;
+}
+
+.actions {
+  margin: 0.75rem 0;
+}
+
+button {
+  cursor: pointer;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.5em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  color: #ffffff;
+  background-color: #396cd8;
+  transition: background-color 0.2s;
+}
+
+button:hover {
+  background-color: #2f5bb7;
+}
+
+.error {
+  color: #b00020;
+  font-weight: 500;
+}
+
+.summary {
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+}
+
+.summary th {
+  text-align: left;
+  padding: 0.3rem 1rem 0.3rem 0;
+  color: #555;
+  font-weight: 600;
+}
+
+.summary td {
+  padding: 0.3rem 0;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #f6f6f6;
+    background-color: #2f2f2f;
+  }
+  .subtitle,
+  .summary th {
+    color: #aaa;
+  }
+  .fasta-input {
+    color: #f6f6f6;
+    background-color: #1f1f1f;
+    border-color: #444;
+  }
+}

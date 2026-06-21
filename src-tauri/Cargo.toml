@@ -1,0 +1,24 @@
+[package]
+name = "iberalign"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Iberalign desktop app: Tauri v2 shell over the align-core engine."
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin on Windows.
+# See https://github.com/rust-lang/cargo/issues/8519
+name = "iberalign_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+align-core.workspace = true
