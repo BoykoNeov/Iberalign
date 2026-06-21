@@ -48,7 +48,8 @@ fn summary(bytes: &[u8]) -> ExitCode {
             println!("alphabet     : {}", s.alphabet.label());
             println!("ungapped len : {}..{}", s.min_len, s.max_len);
             println!("aligned width: {}", s.width);
-            println!("equal width  : {}", if s.equal_width { "yes" } else { "no" });
+            let equal = if s.equal_width { "yes" } else { "no" };
+            println!("equal width  : {equal}");
             for w in &out.warnings {
                 eprintln!("warning: {w}");
             }
