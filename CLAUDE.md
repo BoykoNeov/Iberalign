@@ -83,13 +83,18 @@ dependency-light and surface toolchain/linker issues fast.
   `ui/hover.ts` `computeHover` → column + ungapped position + residue, gap → "—",
   never "length" — the first UI exercise of the col→ungapped parity logic). A
   floating hover tooltip was built then dropped by request — the readout lives
-  only in the bottom status bar. **Perf fixture** landed: `align-cli generate
+  only in the bottom status bar; a **zoom indicator** (`N px/cell · tier`) sits at
+  the right of the status bar. **Perf fixture** landed: `align-cli generate
   <rows> <cols> <out.fasta> [gap_pct]` (bytes straight to a file from Rust — not
   stdout, which PowerShell would corrupt to UTF-16LE+BOM; SplitMix64, no `rand`
-  dep; gitignored `fixtures/generated/`). Remaining: track lane, minimap,
-  keyboard/scrollbar scroll, and the **manual fps smoke** (needs a human at
-  `tauri dev`; pan at the zoomed-out density tier — the real per-frame stress).
-  Plan/context/tasks in `docs/plans/m2-*`.
+  dep; gitignored `fixtures/generated/`). **Manual fps smoke passed** (human at
+  `tauri dev`, 2026-06-22): 10k×10k loads, panning smooth by observation across
+  all tiers incl. the zoomed-out density tier; **fps not numerically measured**
+  (no meter that run) — target met by observation, not a number; no-per-frame-IPC
+  + single-canvas confirmed in source. NB **10k×10k is the stress ceiling, not the
+  design target** — the program isn't aimed at that many sequences. Remaining:
+  track lane, minimap, keyboard/scrollbar scroll. Plan/context/tasks in
+  `docs/plans/m2-*`.
 
 ## Dev-docs
 

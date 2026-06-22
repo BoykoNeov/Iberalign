@@ -28,6 +28,8 @@ import { Canvas2DRenderer } from "../render/Canvas2DRenderer";
 import { RulerRenderer } from "../render/RulerRenderer";
 import { NameColumnRenderer } from "../render/NameColumnRenderer";
 import { RenderLoop } from "../render/loop";
+import { lodFor } from "../render/lod";
+import { DEFAULT_CELL } from "../state/viewport";
 import { NAME_W, RULER_H } from "../render/chrome";
 import { computeHover, type HoverInfo } from "./hover";
 import StatusBar from "./StatusBar";
@@ -67,6 +69,15 @@ export default function Grid({ view }: GridProps) {
   // pixel move within one cell doesn't re-render.
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const lastCellRef = useRef<number | null>(null);
+
+  // The current zoom (cell size in CSS px), surfaced in the status bar. Like
+  // `hover`, this is coarse React state: it changes only on a zoom event, never
+  // per frame, so the canvas keeps drawing on its own rAF loop. `lastZoomRef`
+  // throttles `setZoom` to the *displayed* identity (rounded px + LOD tier) so a
+  // sub-pixel zoom delta doesn't re-render. Initialized `null` so the first zoom
+  // always pushes (and it can't drift if `DEFAULT_CELL` changes).
+  const [zoom, setZoom] = useState(DEFAULT_CELL);
+  const lastZoomRef = useRef<string | null>(null);
 
   // Mount once: build store/renderer/loop, attach input, start drawing. Has no
   // `view` dependency — the view-change effect below feeds dims; this keeps a new
@@ -128,6 +139,16 @@ export default function Grid({ view }: GridProps) {
       const ay = e.clientY - rect.top;
       if (e.ctrlKey || e.metaKey) {
         store.zoom(Math.exp(-e.deltaY * ZOOM_SENSITIVITY), ax, ay);
+        // Push the new zoom to the status bar, throttled to its displayed
+        // identity: re-render only when the rounded px OR the LOD tier changes (a
+        // tier flip can hide inside one rounding bucket right at 3 px, so key on
+        // both). Coarse and event-driven — never per frame.
+        const { cellW } = store.getViewport();
+        const key = `${Math.round(cellW * 10) / 10}|${lodFor(cellW)}`;
+        if (key !== lastZoomRef.current) {
+          lastZoomRef.current = key;
+          setZoom(cellW);
+        }
       } else {
         store.pan(e.deltaX, e.deltaY);
       }
@@ -224,7 +245,7 @@ export default function Grid({ view }: GridProps) {
           <canvas ref={canvasRef} className="grid-canvas" />
         </div>
       </div>
-      <StatusBar hover={hover} />
+      <StatusBar hover={hover} zoom={zoom} />
     </div>
   );
 }

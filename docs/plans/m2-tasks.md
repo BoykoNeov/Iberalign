@@ -14,8 +14,12 @@ exercised end-to-end. **Pinned name column + ruler** are landed and green (canva
 painters on the shared rAF loop, pixel-aligned to the grid). **Status bar**
 readout (hover → column + ungapped position + residue) is landed and green.
 The **perf fixture** is landed and green (`align-cli generate`; gitignored 95.5 MB
-10k×10k fixture parses clean). Remaining: track lane / minimap, keyboard+scrollbar
-scroll, and the **manual fps smoke** (needs a human at `tauri dev` — see below).
+10k×10k fixture parses clean), and the **manual fps smoke passed** (human at
+`tauri dev`, 2026-06-22: 10k×10k loads, panning smooth by observation across all
+tiers incl. density; fps not numerically measured; no-per-frame-IPC + single-canvas
+confirmed in source — see "Verify + wrap"). A **zoom indicator** (status-bar
+`N px/cell · tier`) landed alongside on user request. **Remaining: track lane /
+minimap, keyboard+scrollbar scroll** — then the M2 batch-end ritual.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -125,6 +129,14 @@ scroll, and the **manual fps smoke** (needs a human at `tauri dev` — see below
       readout shows only in the bottom status bar; no floating overlay over the
       canvas. `Tooltip.tsx` removed and `HoverInfo` no longer carries the
       tooltip-anchor px (`x/y/viewW/viewH`).
+- [x] **Zoom indicator (2026-06-22, user request).** Persistent status-bar
+      segment pinned right: `zoom N px/cell · <tier>` (`letter`/`block`/`density`),
+      so the user can see *where* the tier flips (the "blue" is `density`, below
+      3 px/cell). `Grid.tsx` pushes `cellW` to coarse React state only on a
+      ctrl-wheel zoom event (never per frame), throttled via `lastZoomRef` keyed on
+      `${roundedPx}|${tier}` so a sub-pixel delta — or a tier flip hidden inside one
+      rounding bucket at 3 px — is handled honestly. `StatusBar` rounds for display
+      but derives the tier from the true `cellW` (`lodFor`). Typecheck/build green.
 
 ## Interactions
 
@@ -173,9 +185,23 @@ scroll, and the **manual fps smoke** (needs a human at `tauri dev` — see below
       green; `cargo test --workspace` (exit 0), `cargo fmt --check`, clippy
       (`-p align-core -p align-cli --all-targets -D warnings`) clean; Tauri shell
       `cargo build -p iberalign` green.
-- [ ] **Manual fps smoke** (needs a human at `tauri dev` — fps can't be measured
-      headless). Load `fixtures/generated/perf-10k-10k.fasta` in `npm run tauri
-      dev` and confirm:
+- [x] **Manual fps smoke — passed (2026-06-22).** Human ran `tauri dev` and
+      loaded the fixtures. **Result, recorded honestly:** the 95.5 MB 10k×10k file
+      **loads** (checkpoint-zero risk cleared — the 100M-byte IPC transfer +
+      `Uint8Array` + `AlignmentView` build did not hang or OOM); **panning is
+      smooth by direct observation across all LOD tiers, including the zoomed-out
+      density tier** (the worst case). **fps was not numerically measured** — the
+      devtools Performance panel showed no fps meter in this run, so the
+      ≥45–60 fps target is met by *observation*, not a number; the "<200 ms
+      operations" the user saw is not fps evidence and isn't cited as such. The
+      two structural invariants were **confirmed in source** rather than via
+      devtools: only `src/ipc/commands.ts` calls `invoke` (no `invoke` in the rAF
+      draw path — `render/loop.ts`), and the whole grid paints into a single
+      `<canvas class="grid-canvas">` (+ ruler/name chrome canvases), never
+      DOM-per-cell. **Scope note from the user:** 10k×10k is the *stress ceiling*,
+      not the design target ("we are not aiming at that many sequences"). The
+      "all-blue when zoomed out" the user saw is the **density tier** (expected
+      `lodFor(cellW) < 3 px`), not a defect. Original checklist (for the record):
       - **Checkpoint zero — does it load at all, and how long?** A 100M-byte
         render buffer must transfer over IPC (raw `Response`), become a
         `Uint8Array(100M)`, and build an `AlignmentView`. That transfer + JS

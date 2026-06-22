@@ -117,6 +117,14 @@
   font-weight: 600;
 }
 
+/* The persistent zoom readout, pinned to the right edge: `margin-left:auto`
+ * absorbs the free space so it sits hard right, while the name seg still
+ * ellipsizes first when the bar is crowded (the auto margin collapses to 0). */
+.status-zoom {
+  margin-left: auto;
+  padding-left: 1rem;
+}
+
 @media (prefers-color-scheme: dark) {
   .grid-status {
     border-top-color: #444;
