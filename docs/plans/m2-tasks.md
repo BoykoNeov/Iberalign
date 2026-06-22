@@ -11,8 +11,9 @@ Grid.tsx`) + **app wiring** are landed and green, and the **render smoke
 passed** (`tauri dev`: the grid paints, ctrl-wheel zoom crosses LOD tiers) — so
 the full draw path (IPC buffer → view → store → rAF loop → renderer → App) is
 exercised end-to-end. **Pinned name column + ruler** are landed and green (canvas
-painters on the shared rAF loop, pixel-aligned to the grid). Remaining: track lane
-/ minimap / status bar / tooltip, keyboard+scrollbar scroll, the perf fixture +
+painters on the shared rAF loop, pixel-aligned to the grid). **Status bar**
+readout (hover → column + ungapped position + residue) is landed and green.
+Remaining: track lane / minimap, keyboard+scrollbar scroll, the perf fixture +
 fps smoke.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
@@ -111,10 +112,18 @@ fps smoke.
       (occupancy/averaged color per bucket, reusing the density reduction)
       computed once per load — not a scaled full draw. Viewport rectangle +
       click/drag to navigate; stays in sync with scroll/zoom.
-- [ ] **Status bar** — `column N · ungapped pos M (seq name) · residue X` for the
-      hovered cell; gap → "—" for position. (Memo: never label gapped width
-      "length".)
-- [ ] **Hover tooltip** — sequence name, ungapped position, residue at cursor.
+- [x] **Status bar** — pinned bottom strip: `column N · pos M · seq name ·
+      residue X` for the hovered cell; gap → "—" for position; never labels the
+      gapped width "length" (memo). Pipeline: `ui/hover.ts` `computeHover`
+      (pointer → `xToCol`/`yToRow` → `colToUngapped` — the **first** UI exercise
+      of the col→ungapped parity logic) → one `setHover` React state throttled to
+      cell identity (a within-cell pixel move costs no render) → `StatusBar.tsx`.
+      New pixel→cell-under-scroll/zoom + edge/off-content tests in
+      `hover.test.ts`. Typecheck/build/vitest green.
+- [x] **Hover tooltip — built, then dropped by request (2026-06-22).** The same
+      readout shows only in the bottom status bar; no floating overlay over the
+      canvas. `Tooltip.tsx` removed and `HoverInfo` no longer carries the
+      tooltip-anchor px (`x/y/viewW/viewH`).
 
 ## Interactions
 

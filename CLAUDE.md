@@ -74,13 +74,18 @@ dependency-light and surface toolchain/linker issues fast.
   construction round-trip proptest; per-feature fixtures; `load_alignment(path)`
   (Rust reads the file) + `dialog:allow-open` capability; "Open file…" UI.
   Done: GUI smoke + commit (`301c561`) + push; CI green. See `docs/plans/m1-*`.
-- **M2 — planning complete, execution pending.** Rendering MVP: virtualized
-  Canvas2D grid from the in-memory buffer, pinned name column + ruler, nucleotide
-  coloring, pan/zoom/scroll, hover tooltip, minimap, status-bar readout. Plan
-  drafted in `docs/plans/m2-{plan,context,tasks}.md` (awaiting sign-off). Keys:
-  binary render-buffer IPC (raw bytes, once per load); buffer+viewport outside
-  the React render cycle (rAF draw loop); LOD tiers + glyph atlas for fps;
-  col→ungapped parity-guarded against `coords.rs`.
+- **M2 — in progress.** Rendering MVP: virtualized Canvas2D grid from the
+  in-memory buffer. Landed + green: binary render-buffer IPC (raw bytes, once per
+  load); frontend model/coords (col→ungapped parity-guarded vs `coords.rs`);
+  canvas core (colors / glyph atlas / LOD tiers / rAF draw loop, all outside the
+  React render cycle); `ui/Grid` container with drag/wheel pan + ctrl-wheel zoom;
+  pinned name column + scroll-synced ruler; **status-bar readout** (hover →
+  `ui/hover.ts` `computeHover` → column + ungapped position + residue, gap → "—",
+  never "length" — the first UI exercise of the col→ungapped parity logic). A
+  floating hover tooltip was built then dropped by request — the readout lives
+  only in the bottom status bar. Remaining: track lane, minimap,
+  keyboard/scrollbar scroll, perf fixture + fps smoke. Plan/context/tasks in
+  `docs/plans/m2-*`.
 
 ## Dev-docs
 

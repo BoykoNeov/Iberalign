@@ -20,7 +20,7 @@
 // (origin excludes the name column + ruler — see `state/viewport.ts`). Observing
 // the cell keeps that true once the chrome arrives in the sibling cells.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { AlignmentView } from "../model/view";
 import { GridStore } from "../state/store";
@@ -29,6 +29,8 @@ import { RulerRenderer } from "../render/RulerRenderer";
 import { NameColumnRenderer } from "../render/NameColumnRenderer";
 import { RenderLoop } from "../render/loop";
 import { NAME_W, RULER_H } from "../render/chrome";
+import { computeHover, type HoverInfo } from "./hover";
+import StatusBar from "./StatusBar";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -56,6 +58,15 @@ export default function Grid({ view }: GridProps) {
   // a ref so a new alignment never restarts the loop.
   const viewRef = useRef<AlignmentView | null>(null);
   const storeRef = useRef<GridStore | null>(null);
+
+  // The hovered cell, driving the status bar + tooltip. This is the ONE piece of
+  // React state the grid carries: it changes on a *readout value change* (a new
+  // cell under the cursor), never per frame — so React re-renders coarsely while
+  // the canvas keeps drawing on its own rAF loop. `lastCellRef` throttles
+  // `setHover` to cell identity (the cell's flat index, or `null` off-grid) so a
+  // pixel move within one cell doesn't re-render.
+  const [hover, setHover] = useState<HoverInfo | null>(null);
+  const lastCellRef = useRef<number | null>(null);
 
   // Mount once: build store/renderer/loop, attach input, start drawing. Has no
   // `view` dependency — the view-change effect below feeds dims; this keeps a new
@@ -92,6 +103,21 @@ export default function Grid({ view }: GridProps) {
     });
     ro.observe(cell);
 
+    // Resolve the cell under a viewport-space cursor (window px) and push it to
+    // the readout — but only when the *cell* changes (or grid↔off-grid), so a
+    // pixel move inside one cell costs no React render. Reads the live viewport
+    // and view from refs, so it reflects pan/zoom already applied this event.
+    const updateHover = (clientX: number, clientY: number) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const rect = canvas.getBoundingClientRect();
+      const info = computeHover(view, store.getViewport(), clientX - rect.left, clientY - rect.top);
+      const key = info ? info.row * view.width + info.col : null;
+      if (key === lastCellRef.current) return;
+      lastCellRef.current = key;
+      setHover(info);
+    };
+
     // Wheel: ctrl/⌘ → zoom about the cursor; otherwise → pan. Native + passive:
     // false so preventDefault actually suppresses page zoom/scroll (React's JSX
     // onWheel is passive and would log a warning + zoom the whole page).
@@ -105,6 +131,9 @@ export default function Grid({ view }: GridProps) {
       } else {
         store.pan(e.deltaX, e.deltaY);
       }
+      // Zoom/pan moved the content under a stationary cursor — refresh the
+      // readout against the just-applied viewport.
+      updateHover(e.clientX, e.clientY);
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
@@ -121,12 +150,21 @@ export default function Grid({ view }: GridProps) {
       canvas.classList.add("dragging");
     };
     const onPointerMove = (e: PointerEvent) => {
-      if (!dragging) return;
-      // Grab-and-drag: moving the pointer right reveals content to the left, so
-      // scroll moves opposite the pointer delta.
-      store.pan(lastX - e.clientX, lastY - e.clientY);
-      lastX = e.clientX;
-      lastY = e.clientY;
+      if (dragging) {
+        // Grab-and-drag: moving the pointer right reveals content to the left, so
+        // scroll moves opposite the pointer delta.
+        store.pan(lastX - e.clientX, lastY - e.clientY);
+        lastX = e.clientX;
+        lastY = e.clientY;
+      }
+      // Hover tracks every move (panning moves the cell under the cursor too).
+      updateHover(e.clientX, e.clientY);
+    };
+    // Pointer left the canvas (and not mid-capture): drop the readout.
+    const onPointerLeave = () => {
+      if (dragging) return;
+      lastCellRef.current = null;
+      setHover(null);
     };
     const endDrag = (e: PointerEvent) => {
       if (!dragging) return;
@@ -138,6 +176,7 @@ export default function Grid({ view }: GridProps) {
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", endDrag);
+    canvas.addEventListener("pointerleave", onPointerLeave);
 
     loop.start();
 
@@ -149,6 +188,7 @@ export default function Grid({ view }: GridProps) {
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", endDrag);
       canvas.removeEventListener("pointercancel", endDrag);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
       renderer.dispose();
       ruler.dispose();
       names.dispose();
@@ -162,18 +202,29 @@ export default function Grid({ view }: GridProps) {
   useEffect(() => {
     viewRef.current = view;
     storeRef.current?.setDims(view.width, view.numRows);
+    // The old readout referenced the previous alignment's rows — drop it so a
+    // stale name/position can't linger until the next pointer move.
+    lastCellRef.current = null;
+    setHover(null);
   }, [view]);
 
-  // 2×2 layout: corner, ruler (top), name column (left), grid cell (bottom-
-  // right). Auto-placement fills in DOM order. Only the grid cell is observed.
+  // Shell: a flex column holding the pinned-chrome grid (flex:1) over the status
+  // bar (auto height). The grid is a 2×2 CSS grid — corner, ruler (top), name
+  // column (left), grid cell (bottom-right); auto-placement fills in DOM order,
+  // and only the grid cell is observed for the viewport extent. The hovered
+  // cell's readout shows in the status bar at the bottom — no floating overlay
+  // over the canvas.
   return (
-    <div className="grid-container" style={CHROME_VARS}>
-      <div className="grid-corner" />
-      <canvas ref={rulerRef} className="grid-ruler" />
-      <canvas ref={nameRef} className="grid-names" />
-      <div className="grid-canvas-cell" ref={cellRef}>
-        <canvas ref={canvasRef} className="grid-canvas" />
+    <div className="grid-shell">
+      <div className="grid-container" style={CHROME_VARS}>
+        <div className="grid-corner" />
+        <canvas ref={rulerRef} className="grid-ruler" />
+        <canvas ref={nameRef} className="grid-names" />
+        <div className="grid-canvas-cell" ref={cellRef}>
+          <canvas ref={canvasRef} className="grid-canvas" />
+        </div>
       </div>
+      <StatusBar hover={hover} />
     </div>
   );
 }
