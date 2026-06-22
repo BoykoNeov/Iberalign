@@ -27,8 +27,11 @@ import { GridStore } from "../state/store";
 import { Canvas2DRenderer } from "../render/Canvas2DRenderer";
 import { RulerRenderer } from "../render/RulerRenderer";
 import { NameColumnRenderer } from "../render/NameColumnRenderer";
+import { ScrollbarsLayer } from "../render/ScrollbarsLayer";
+import { layoutScrollbars, scrollForThumbPos, SCROLLBAR_THICKNESS } from "../render/scrollbar";
 import { RenderLoop } from "../render/loop";
 import { lodFor } from "../render/lod";
+import type { Dims } from "../state/viewport";
 import { DEFAULT_CELL } from "../state/viewport";
 import { NAME_W, RULER_H } from "../render/chrome";
 import { computeHover, type HoverInfo } from "./hover";
@@ -40,6 +43,10 @@ import "./Grid.css";
 const CHROME_VARS = {
   "--name-w": `${NAME_W}px`,
   "--ruler-h": `${RULER_H}px`,
+  // The CSS thumb thickness MUST match the geometry constant: `layoutScrollbars`
+  // shortens each track by this when both bars show, so the visual bar and the
+  // reserved corner gap can't disagree.
+  "--scrollbar-thickness": `${SCROLLBAR_THICKNESS}px`,
 } as CSSProperties;
 
 // Wheel-zoom sensitivity: factor = exp(-deltaY * k). One ~100px notch ⇒ ~1.22×
@@ -56,6 +63,8 @@ export default function Grid({ view }: GridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rulerRef = useRef<HTMLCanvasElement>(null);
   const nameRef = useRef<HTMLCanvasElement>(null);
+  const vThumbRef = useRef<HTMLDivElement>(null);
+  const hThumbRef = useRef<HTMLDivElement>(null);
   // Read by the rAF loop each dirty frame and by the view-change effect; kept in
   // a ref so a new alignment never restarts the loop.
   const viewRef = useRef<AlignmentView | null>(null);
@@ -90,9 +99,11 @@ export default function Grid({ view }: GridProps) {
     const renderer = new Canvas2DRenderer(canvas);
     const ruler = new RulerRenderer(rulerRef.current!);
     const names = new NameColumnRenderer(nameRef.current!);
-    // Grid first, then chrome — all painted in one dirty frame, so the ruler /
-    // name column never tear against the grid under pan/zoom.
-    const loop = new RenderLoop(store, [renderer, ruler, names], () => viewRef.current);
+    const scrollbars = new ScrollbarsLayer(vThumbRef.current!, hThumbRef.current!);
+    // Grid first, then chrome, then the scrollbar thumbs — all updated in one
+    // dirty frame, so the thumbs / ruler / name column never lag the grid under
+    // pan/zoom.
+    const loop = new RenderLoop(store, [renderer, ruler, names, scrollbars], () => viewRef.current);
     storeRef.current = store;
 
     const dpr = () => globalThis.devicePixelRatio || 1;
@@ -164,6 +175,10 @@ export default function Grid({ view }: GridProps) {
     let lastY = 0;
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      // Take keyboard focus so arrows/Page/Home/End scroll the grid (the cell is
+      // tabIndex=0). preventScroll: it's already on screen — don't let the browser
+      // nudge the layout to "reveal" it.
+      cell.focus({ preventScroll: true });
       dragging = true;
       lastX = e.clientX;
       lastY = e.clientY;
@@ -199,6 +214,116 @@ export default function Grid({ view }: GridProps) {
     canvas.addEventListener("pointercancel", endDrag);
     canvas.addEventListener("pointerleave", onPointerLeave);
 
+    // Keyboard scroll (cell is focusable). Arrows nudge a cell; Page steps a
+    // viewport; Home/End jump to the row's left/right extreme; Ctrl/⌘+Home/End to
+    // the alignment's top-left / bottom-right corner — the latter is what makes
+    // the LAST row/col always reachable without a drag. Absolute jumps use a huge
+    // target and lean on `store.scrollTo`'s clamp; only handled keys
+    // `preventDefault` (so an unbound key still does its normal thing).
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!viewRef.current) return;
+      const vp = store.getViewport();
+      const corner = e.ctrlKey || e.metaKey;
+      // A "page" is a viewport less one cell of overlap, never below one cell.
+      const pageY = Math.max(vp.cellH, vp.viewH - vp.cellH);
+      const FAR = Number.MAX_SAFE_INTEGER; // clamped to the content edge by scrollTo
+      switch (e.key) {
+        case "ArrowUp":
+          store.pan(0, -vp.cellH);
+          break;
+        case "ArrowDown":
+          store.pan(0, vp.cellH);
+          break;
+        case "ArrowLeft":
+          store.pan(-vp.cellW, 0);
+          break;
+        case "ArrowRight":
+          store.pan(vp.cellW, 0);
+          break;
+        case "PageUp":
+          store.pan(0, -pageY);
+          break;
+        case "PageDown":
+          store.pan(0, pageY);
+          break;
+        case "Home":
+          store.scrollTo(0, corner ? 0 : vp.scrollY);
+          break;
+        case "End":
+          store.scrollTo(FAR, corner ? FAR : vp.scrollY);
+          break;
+        default:
+          return; // unhandled — leave it for the browser
+      }
+      e.preventDefault();
+    };
+    cell.addEventListener("keydown", onKeyDown);
+
+    // Scrollbar thumb drag. The thumbs float over the canvas edges; dragging one
+    // recomputes the SAME `layoutScrollbars` against the live viewport (shared
+    // geometry → exact round-trip) and writes an absolute scroll. `grab` is the
+    // cursor's offset within the thumb at grab time, so the thumb doesn't jump to
+    // the cursor on the first move. Pointer capture keeps the drag alive past the
+    // thumb's edges. The OTHER axis is held fixed.
+    const dimsNow = (): Dims => ({ cols: viewRef.current!.width, rows: viewRef.current!.numRows });
+    let vGrab = 0;
+    let hGrab = 0;
+    let vDragging = false;
+    let hDragging = false;
+    const vThumb = vThumbRef.current!;
+    const hThumb = hThumbRef.current!;
+
+    const onVThumbDown = (e: PointerEvent) => {
+      if (e.button !== 0 || !viewRef.current) return;
+      e.preventDefault();
+      const rect = cell.getBoundingClientRect();
+      const { v } = layoutScrollbars(store.getViewport(), dimsNow());
+      vGrab = e.clientY - rect.top - v.thumbPos;
+      vDragging = true;
+      vThumb.setPointerCapture(e.pointerId);
+    };
+    const onVThumbMove = (e: PointerEvent) => {
+      if (!vDragging || !viewRef.current) return;
+      const rect = cell.getBoundingClientRect();
+      const vp2 = store.getViewport();
+      const { v } = layoutScrollbars(vp2, dimsNow());
+      store.scrollTo(vp2.scrollX, scrollForThumbPos(e.clientY - rect.top - vGrab, v));
+    };
+    const onHThumbDown = (e: PointerEvent) => {
+      if (e.button !== 0 || !viewRef.current) return;
+      e.preventDefault();
+      const rect = cell.getBoundingClientRect();
+      const { h } = layoutScrollbars(store.getViewport(), dimsNow());
+      hGrab = e.clientX - rect.left - h.thumbPos;
+      hDragging = true;
+      hThumb.setPointerCapture(e.pointerId);
+    };
+    const onHThumbMove = (e: PointerEvent) => {
+      if (!hDragging || !viewRef.current) return;
+      const rect = cell.getBoundingClientRect();
+      const vp2 = store.getViewport();
+      const { h } = layoutScrollbars(vp2, dimsNow());
+      store.scrollTo(scrollForThumbPos(e.clientX - rect.left - hGrab, h), vp2.scrollY);
+    };
+    const endVThumb = (e: PointerEvent) => {
+      if (!vDragging) return;
+      vDragging = false;
+      if (vThumb.hasPointerCapture(e.pointerId)) vThumb.releasePointerCapture(e.pointerId);
+    };
+    const endHThumb = (e: PointerEvent) => {
+      if (!hDragging) return;
+      hDragging = false;
+      if (hThumb.hasPointerCapture(e.pointerId)) hThumb.releasePointerCapture(e.pointerId);
+    };
+    vThumb.addEventListener("pointerdown", onVThumbDown);
+    vThumb.addEventListener("pointermove", onVThumbMove);
+    vThumb.addEventListener("pointerup", endVThumb);
+    vThumb.addEventListener("pointercancel", endVThumb);
+    hThumb.addEventListener("pointerdown", onHThumbDown);
+    hThumb.addEventListener("pointermove", onHThumbMove);
+    hThumb.addEventListener("pointerup", endHThumb);
+    hThumb.addEventListener("pointercancel", endHThumb);
+
     loop.start();
 
     return () => {
@@ -210,6 +335,15 @@ export default function Grid({ view }: GridProps) {
       canvas.removeEventListener("pointerup", endDrag);
       canvas.removeEventListener("pointercancel", endDrag);
       canvas.removeEventListener("pointerleave", onPointerLeave);
+      cell.removeEventListener("keydown", onKeyDown);
+      vThumb.removeEventListener("pointerdown", onVThumbDown);
+      vThumb.removeEventListener("pointermove", onVThumbMove);
+      vThumb.removeEventListener("pointerup", endVThumb);
+      vThumb.removeEventListener("pointercancel", endVThumb);
+      hThumb.removeEventListener("pointerdown", onHThumbDown);
+      hThumb.removeEventListener("pointermove", onHThumbMove);
+      hThumb.removeEventListener("pointerup", endHThumb);
+      hThumb.removeEventListener("pointercancel", endHThumb);
       renderer.dispose();
       ruler.dispose();
       names.dispose();
@@ -260,8 +394,18 @@ export default function Grid({ view }: GridProps) {
         <div className="grid-corner" />
         <canvas ref={rulerRef} className="grid-ruler" />
         <canvas ref={nameRef} className="grid-names" />
-        <div className="grid-canvas-cell" ref={cellRef}>
+        <div
+          className="grid-canvas-cell"
+          ref={cellRef}
+          tabIndex={0}
+          role="application"
+          aria-label="Alignment grid — drag, scroll, or use arrow / Page / Home / End keys to navigate"
+        >
           <canvas ref={canvasRef} className="grid-canvas" />
+          {/* Floating overlay scrollbars: positioned each dirty frame by
+              ScrollbarsLayer (style only), drag-handled in the mount effect. */}
+          <div ref={vThumbRef} className="grid-scrollbar grid-scrollbar-v" />
+          <div ref={hThumbRef} className="grid-scrollbar grid-scrollbar-h" />
         </div>
       </div>
       <StatusBar hover={hover} zoom={zoom} onZoomTo={handleZoomTo} />

@@ -31,6 +31,14 @@ describe("GridStore — dirty contract", () => {
     expect(store.consumeDirty()).toBe(true);
   });
 
+  it("scrollTo marks dirty and sets an absolute (clamped) offset", () => {
+    store.scrollTo(1e9, 0); // past the right edge
+    expect(store.consumeDirty()).toBe(true);
+    const vp = store.getViewport();
+    expect(vp.scrollX).toBe(100 * vp.cellW - vp.viewW); // 100 cols, clamped to edge
+    expect(vp.scrollY).toBe(0);
+  });
+
   it("resize marks dirty", () => {
     store.resize(400, 300);
     expect(store.consumeDirty()).toBe(true);

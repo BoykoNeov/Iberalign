@@ -61,6 +61,60 @@
   overflow: hidden;
 }
 
+/* The grid cell is focusable (tabIndex) so it can receive keyboard scroll. Show
+ * focus only for keyboard users (not on click-to-pan), inset so it's visible
+ * inside the overflow:hidden box. */
+.grid-canvas-cell:focus {
+  outline: none;
+}
+.grid-canvas-cell:focus-visible {
+  outline: 2px solid #396cd8;
+  outline-offset: -2px;
+}
+
+/* Floating overlay scrollbars. ScrollbarsLayer toggles `display` and sets the
+ * long-axis size + transform each dirty frame; CSS owns the look + the pinned
+ * edge + the short-axis thickness (one source of truth via --scrollbar-thickness,
+ * matched to the geometry constant). Hidden until the layer shows them, so they
+ * never flash before the first draw. */
+.grid-scrollbar {
+  position: absolute;
+  display: none;
+  z-index: 2;
+  border-radius: 999px;
+  background: rgba(60, 64, 70, 0.4);
+  cursor: pointer;
+  /* The thumb owns the pointer for its drag; stop touch from also panning. */
+  touch-action: none;
+}
+
+.grid-scrollbar:hover {
+  background: rgba(60, 64, 70, 0.6);
+}
+
+/* Vertical thumb rides the right edge; layer sets height + translateY. */
+.grid-scrollbar-v {
+  top: 0;
+  right: 1px;
+  width: var(--scrollbar-thickness, 10px);
+}
+
+/* Horizontal thumb rides the bottom edge; layer sets width + translateX. */
+.grid-scrollbar-h {
+  left: 0;
+  bottom: 1px;
+  height: var(--scrollbar-thickness, 10px);
+}
+
+@media (prefers-color-scheme: dark) {
+  .grid-scrollbar {
+    background: rgba(200, 205, 212, 0.35);
+  }
+  .grid-scrollbar:hover {
+    background: rgba(200, 205, 212, 0.55);
+  }
+}
+
 .grid-canvas {
   display: block;
   width: 100%;

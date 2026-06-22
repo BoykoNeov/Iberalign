@@ -10,6 +10,7 @@ import {
   initViewport,
   clamp,
   pan,
+  scrollTo,
   resize,
   zoomAbout,
   contentWidth,
@@ -74,6 +75,26 @@ describe("pan", () => {
 
   it("cannot pan past the top-left origin", () => {
     const vp = pan(interior(), DIMS, -1e9, -1e9);
+    expect(vp.scrollX).toBe(0);
+    expect(vp.scrollY).toBe(0);
+  });
+});
+
+describe("scrollTo", () => {
+  it("sets an absolute interior offset", () => {
+    const vp = scrollTo(interior(), DIMS, 350, 120);
+    expect(vp.scrollX).toBe(350);
+    expect(vp.scrollY).toBe(120);
+  });
+
+  it("clamps a past-the-end target to the content edge (reaches last row/col)", () => {
+    const vp = scrollTo(interior(), DIMS, 1e9, 1e9);
+    expect(vp.scrollX).toBe(contentWidth(vp, DIMS) - vp.viewW);
+    expect(vp.scrollY).toBe(contentHeight(vp, DIMS) - vp.viewH);
+  });
+
+  it("clamps a negative target to the origin", () => {
+    const vp = scrollTo(interior(), DIMS, -100, -100);
     expect(vp.scrollX).toBe(0);
     expect(vp.scrollY).toBe(0);
   });

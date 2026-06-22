@@ -86,6 +86,14 @@ export function pan(vp: Viewport, dims: Dims, dx: number, dy: number): Viewport 
   return clamp({ ...vp, scrollX: vp.scrollX + dx, scrollY: vp.scrollY + dy }, dims);
 }
 
+/** Set the scroll offset to an ABSOLUTE `(x, y)` CSS px, then re-clamp. The
+ *  pointer-free navigators (keyboard Home/End/corner jumps, scrollbar thumb
+ *  drag, track paging) target a position rather than a delta — this is their one
+ *  write path, so the same clamp guards every entry. */
+export function scrollTo(vp: Viewport, dims: Dims, x: number, y: number): Viewport {
+  return clamp({ ...vp, scrollX: x, scrollY: y }, dims);
+}
+
 /** Set the visible grid-canvas size (CSS px) and re-clamp (a smaller alignment
  *  may now fit entirely, a larger view may expose past the old max scroll). */
 export function resize(vp: Viewport, dims: Dims, viewW: number, viewH: number): Viewport {

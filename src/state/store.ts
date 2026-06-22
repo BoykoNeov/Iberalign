@@ -22,6 +22,7 @@ import {
   initViewport,
   clamp,
   pan,
+  scrollTo,
   resize,
   zoomAbout,
 } from "./viewport";
@@ -75,6 +76,12 @@ export class GridStore {
   /** Translate the visible window by `(dx, dy)` CSS px. */
   pan(dx: number, dy: number): void {
     this.mutate(pan(this.viewport, this.dims, dx, dy));
+  }
+
+  /** Move the visible window to an ABSOLUTE scroll offset in CSS px (keyboard
+   *  jumps, scrollbar thumb drag / track paging). */
+  scrollTo(x: number, y: number): void {
+    this.mutate(scrollTo(this.viewport, this.dims, x, y));
   }
 
   /** Zoom about a grid-canvas cursor point `(ax, ay)` in CSS px. */
