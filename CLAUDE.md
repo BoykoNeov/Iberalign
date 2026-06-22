@@ -83,9 +83,13 @@ dependency-light and surface toolchain/linker issues fast.
   `ui/hover.ts` `computeHover` → column + ungapped position + residue, gap → "—",
   never "length" — the first UI exercise of the col→ungapped parity logic). A
   floating hover tooltip was built then dropped by request — the readout lives
-  only in the bottom status bar. Remaining: track lane, minimap,
-  keyboard/scrollbar scroll, perf fixture + fps smoke. Plan/context/tasks in
-  `docs/plans/m2-*`.
+  only in the bottom status bar. **Perf fixture** landed: `align-cli generate
+  <rows> <cols> <out.fasta> [gap_pct]` (bytes straight to a file from Rust — not
+  stdout, which PowerShell would corrupt to UTF-16LE+BOM; SplitMix64, no `rand`
+  dep; gitignored `fixtures/generated/`). Remaining: track lane, minimap,
+  keyboard/scrollbar scroll, and the **manual fps smoke** (needs a human at
+  `tauri dev`; pan at the zoomed-out density tier — the real per-frame stress).
+  Plan/context/tasks in `docs/plans/m2-*`.
 
 ## Dev-docs
 

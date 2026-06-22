@@ -13,8 +13,9 @@ the full draw path (IPC buffer → view → store → rAF loop → renderer → 
 exercised end-to-end. **Pinned name column + ruler** are landed and green (canvas
 painters on the shared rAF loop, pixel-aligned to the grid). **Status bar**
 readout (hover → column + ungapped position + residue) is landed and green.
-Remaining: track lane / minimap, keyboard+scrollbar scroll, the perf fixture +
-fps smoke.
+The **perf fixture** is landed and green (`align-cli generate`; gitignored 95.5 MB
+10k×10k fixture parses clean). Remaining: track lane / minimap, keyboard+scrollbar
+scroll, and the **manual fps smoke** (needs a human at `tauri dev` — see below).
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -150,19 +151,51 @@ fps smoke.
 
 ## Perf fixture (acceptance gate)
 
-- [ ] A **generated** thousands×thousands FASTA for the fps smoke — an
-      `align-cli generate <rows> <cols>` subcommand (preferred — CI-adjacent) or
-      a small script. **Do not commit the large file** (gitignore it).
+- [x] `align-cli generate <rows> <cols> <out.fasta> [gap_pct]` — writes a
+      synthetic equal-width FASTA. Bytes go **straight to an explicit path from
+      Rust, never stdout** (a PowerShell `>` redirect would emit UTF-16LE+BOM and
+      the parser would reject it — an encoding artifact, not a parser bug).
+      SplitMix64 PRNG (no `rand` dep) → deterministic in a fixed seed; uniform
+      random ACGT with `gap_pct`% interior gaps (default 8 — real rows have no
+      horizontal correlation, so this already yields realistic short fill-runs;
+      per-column consensus would add only visual bands, no perf change). Core is
+      a `write_fasta<W: Write>` so it's unit-tested in-process: parses back to the
+      expected shape, byte-for-byte determinism, `gap_pct=0` ⇒ no gaps.
+- [x] **Do not commit the large file** — `/fixtures/generated/` is gitignored;
+      the `generate` command is the reproducible artifact. Generated
+      `fixtures/generated/perf-10k-10k.fasta` (95.5 MB, 0.36 s) and confirmed it
+      parses via `iberalign-cli summary`: 10000 seqs, DNA, width 10000,
+      equal-width, ungapped 9103..9300 (consistent with ~8% gaps).
 
 ## Verify + wrap
 
-- [ ] `npm run typecheck && npm run build` green; pure-math + parity unit tests
-      green; `cargo test --workspace`, `cargo fmt --check`, clippy (`-D warnings`)
-      clean; Tauri shell `cargo build -p iberalign` green.
-- [ ] **Manual fps smoke** — load the generated fixture in `npm run tauri dev`;
-      confirm smooth pan/zoom (≥ ~45–60 fps; check devtools/perf), tooltip +
-      status readout correct, minimap synced, no per-frame IPC (watch the IPC
-      log), no DOM-per-cell (inspect the DOM — one canvas, not N elements).
+- [x] `npm run typecheck && npm run build` green; pure-math + parity unit tests
+      green; `cargo test --workspace` (exit 0), `cargo fmt --check`, clippy
+      (`-p align-core -p align-cli --all-targets -D warnings`) clean; Tauri shell
+      `cargo build -p iberalign` green.
+- [ ] **Manual fps smoke** (needs a human at `tauri dev` — fps can't be measured
+      headless). Load `fixtures/generated/perf-10k-10k.fasta` in `npm run tauri
+      dev` and confirm:
+      - **Checkpoint zero — does it load at all, and how long?** A 100M-byte
+        render buffer must transfer over IPC (raw `Response`), become a
+        `Uint8Array(100M)`, and build an `AlignmentView`. That transfer + JS
+        allocation is the single biggest untested risk and is *upstream* of any
+        fps number — if it hangs or OOMs, fps never gets measured. (Rust-side
+        read+parse is **not** the risk: `summary` parses the 95.5 MB file in
+        ~0.47 s.) Note load wall-time and that memory stays sane. Use
+        `perf-3k-3k.fasta` (8.6 MB) as a "this should definitely be smooth"
+        baseline — a bad 10k result then reads as a regression, not "10k is at
+        the edge".
+      - **Zoom fully out to the density tier and pan there** — this is the worst
+        case (occupancy is recomputed over the whole visible window every frame),
+        and the one most likely to hide a real perf problem. Letter-tier panning
+        is bounded by the visible window, ~size-independent, so it won't catch
+        anything — don't stop at letter tier.
+      - ≥ ~45–60 fps across letter / block / density tiers (devtools perf panel).
+      - status-bar readout correct on hover; (minimap synced once it lands).
+      - **no per-frame IPC** — watch the IPC log; load should be the only call.
+      - **no DOM-per-cell** — inspect the DOM: one `<canvas>` (+ chrome canvases),
+        not N elements.
 - [ ] Batch-end ritual: update `m2-*` docs + `CLAUDE.md` milestone status +
       memory; commit (Conventional Commits) + push; CI green on both jobs.
 

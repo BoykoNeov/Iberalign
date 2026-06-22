@@ -12,6 +12,10 @@ dist-ssr/
 /src-tauri/target/
 /src-tauri/gen/schemas/
 
+# Generated perf fixtures (large synthetic FASTA from `align-cli generate`;
+# regenerate on demand — the command is the reproducible artifact, not the file)
+/fixtures/generated/
+
 # Logs
 *.log
 npm-debug.log*
