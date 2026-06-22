@@ -1,6 +1,10 @@
 # Normalize line endings to LF in the repo across all platforms.
 * text=auto eol=lf
 
+# The cross-platform launcher is a sh/cmd polyglot — its bash half only parses
+# with LF line endings, so pin it even if the global rule above ever changes.
+start.cmd text eol=lf
+
 # Binary assets — never normalize.
 *.png binary
 *.ico binary
