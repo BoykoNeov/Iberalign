@@ -18,8 +18,10 @@ The **perf fixture** is landed and green (`align-cli generate`; gitignored 95.5 
 `tauri dev`, 2026-06-22: 10k×10k loads, panning smooth by observation across all
 tiers incl. density; fps not numerically measured; no-per-frame-IPC + single-canvas
 confirmed in source — see "Verify + wrap"). A **zoom indicator** (status-bar
-`N px/cell · tier`) landed alongside on user request. **Remaining: track lane /
-minimap, keyboard+scrollbar scroll** — then the M2 batch-end ritual.
+`N px/cell · tier`) landed alongside on user request. **Keyboard navigation +
+overlay scrollbars** landed and green (committed `b8664e2`, user-confirmed
+working at `tauri dev`). **Remaining: track lane / minimap** — then the M2
+batch-end ritual.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -145,8 +147,16 @@ minimap, keyboard+scrollbar scroll** — then the M2 batch-end ritual.
 - [x] **Zoom** — ctrl/⌘-wheel scales cell size about the cursor via `store.zoom`
       (clamped `MIN_CELL..MAX_CELL`, crosses LOD tiers). Non-passive native wheel
       listener so `preventDefault` suppresses page zoom. Wired in `Grid.tsx`.
-- [ ] **Scroll** — keyboard/scrollbar; large alignments reachable to last
-      row/col. (Lands with the chrome pass alongside the ruler/name column.)
+- [x] **Scroll** — keyboard + floating overlay scrollbars; large alignments
+      reachable to the last row/col (committed `b8664e2`). Keyboard: arrows nudge
+      a cell, Page steps a viewport, Home/End to row ends, Ctrl/⌘+Home/End to the
+      alignment's top-left / bottom-right corner. Scrollbars: pure geometry in
+      `render/scrollbar.ts` (round-trip-tested), a `ScrollbarsLayer` `Drawable`
+      positioning two overlay thumb divs each dirty frame, thumb-drag in
+      `Grid.tsx` reusing the same layout. `state/viewport.ts` `scrollTo` is the
+      one clamped absolute-scroll write path. **NB:** the next batch (selection)
+      reworks the arrow keys to move a *cursor* instead of panning — see
+      `selection-plan.md`.
 
 ## App wiring
 

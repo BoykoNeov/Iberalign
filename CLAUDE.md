@@ -92,9 +92,20 @@ dependency-light and surface toolchain/linker issues fast.
   all tiers incl. the zoomed-out density tier; **fps not numerically measured**
   (no meter that run) — target met by observation, not a number; no-per-frame-IPC
   + single-canvas confirmed in source. NB **10k×10k is the stress ceiling, not the
-  design target** — the program isn't aimed at that many sequences. Remaining:
-  track lane, minimap, keyboard/scrollbar scroll. Plan/context/tasks in
-  `docs/plans/m2-*`.
+  design target** — the program isn't aimed at that many sequences. **Keyboard
+  navigation + floating overlay scrollbars** landed and green (committed
+  `b8664e2`, user-confirmed): arrows/Page/Home/End + Ctrl/⌘+Home/End reach the
+  last row/col; macOS-style overlay thumbs (pure round-trip-tested geometry in
+  `render/scrollbar.ts` + a `ScrollbarsLayer` `Drawable`); `viewport.ts` gained
+  the `scrollTo` clamped absolute-scroll reducer. Remaining: track lane, minimap.
+  Plan/context/tasks in `docs/plans/m2-*`.
+- **Selection (M5 slice) — planned, not started.** Spreadsheet-style cursor +
+  rectangular selection (click selects; arrows move the cursor with the view
+  scroll-following; Shift+arrows / Shift+click extend a rect), as the foundation
+  for copy (Phase 2: Tauri `clipboard-manager`) and delete/edit (rest of M5,
+  reversible Rust `EditCmd`). Pulled ahead of M4 at user request. **NB:** the
+  implementing batch reworks the arrow keys from *panning* (M2) to *cursor
+  movement*. Full design in `docs/plans/selection-{plan,context,tasks}.md`.
 
 ## Dev-docs
 
