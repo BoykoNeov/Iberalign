@@ -10,8 +10,10 @@ pure-logic test runner. **Canvas core** (colors/glyphs/Renderer/Canvas2DRenderer
 Grid.tsx`) + **app wiring** are landed and green, and the **render smoke
 passed** (`tauri dev`: the grid paints, ctrl-wheel zoom crosses LOD tiers) — so
 the full draw path (IPC buffer → view → store → rAF loop → renderer → App) is
-exercised end-to-end. Remaining: chrome (name col / ruler / track lane / minimap
-/ status bar / tooltip), keyboard+scrollbar scroll, the perf fixture + fps smoke.
+exercised end-to-end. **Pinned name column + ruler** are landed and green (canvas
+painters on the shared rAF loop, pixel-aligned to the grid). Remaining: track lane
+/ minimap / status bar / tooltip, keyboard+scrollbar scroll, the perf fixture +
+fps smoke.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -92,8 +94,17 @@ exercised end-to-end. Remaining: chrome (name col / ruler / track lane / minimap
       excludes chrome), wires pointer/wheel input. Outer `.grid-container` is a
       CSS grid that today renders only the canvas cell — chrome lands as child
       cells (no store lift). StrictMode-safe cleanup (nulls refs).
-- [ ] **Name column** — pinned left, row names, scroll-synced vertically.
-- [ ] **Position ruler** — pinned top, column ticks, scroll-synced horizontally.
+- [x] **Name column** — `render/NameColumnRenderer.ts`: pinned-left canvas, draws
+      visible row names at `rowToY` (same edge math + `round(*dpr)` as the grid →
+      pixel-aligned), clipped via a clip region (not `fillText` maxWidth). Driven
+      by the shared rAF loop → scroll-synced vertically, no tearing.
+- [x] **Position ruler** — `render/RulerRenderer.ts`: pinned-top canvas, 1-based
+      **alignment-column** ticks/labels at `colToX` (pixel-aligned to the grid),
+      thinned by `niceLabelStep` (pure, `ticks.ts`, unit-tested) anchored to the
+      **absolute** column so labels don't jitter on pan. Shared rAF loop →
+      scroll-synced horizontally. *(Loop generalized to drive a `Drawable[]`;
+      `NAME_W`/`RULER_H`/palette centralized in `render/chrome.ts`, CSS vars set
+      from them.)*
 - [ ] Empty **track lane** between ruler and grid — laid out, column-aligned,
       reserved for M4. No data.
 - [ ] **Minimap** — whole-alignment overview: a **downsampled aggregate**

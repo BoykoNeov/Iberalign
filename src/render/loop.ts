@@ -10,7 +10,7 @@
 // re-renders per frame.
 
 import type { GridStore } from "../state/store";
-import type { Renderer } from "./Renderer";
+import type { Drawable } from "./Renderer";
 import type { AlignmentView } from "../model/view";
 
 export class RenderLoop {
@@ -18,14 +18,15 @@ export class RenderLoop {
   private running = false;
 
   /**
-   * @param store    holds the per-frame viewport + the dirty flag.
-   * @param renderer the target to `draw` into when dirty.
-   * @param getView  the current alignment (or `null` before a load) — read each
-   *                 dirty frame so a load/unload needs no loop restart.
+   * @param store     holds the per-frame viewport + the dirty flag.
+   * @param drawables the layers to `draw` when dirty (grid + chrome painters),
+   *                  painted in array order in ONE frame so they can't tear.
+   * @param getView   the current alignment (or `null` before a load) — read each
+   *                  dirty frame so a load/unload needs no loop restart.
    */
   constructor(
     private readonly store: GridStore,
-    private readonly renderer: Renderer,
+    private readonly drawables: readonly Drawable[],
     private readonly getView: () => AlignmentView | null,
   ) {}
 
@@ -38,7 +39,10 @@ export class RenderLoop {
       this.rafId = requestAnimationFrame(frame);
       if (this.store.consumeDirty()) {
         const view = this.getView();
-        if (view) this.renderer.draw(view, this.store.getViewport());
+        if (view) {
+          const vp = this.store.getViewport();
+          for (const d of this.drawables) d.draw(view, vp);
+        }
       }
     };
     this.rafId = requestAnimationFrame(frame);

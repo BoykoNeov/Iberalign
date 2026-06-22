@@ -1,21 +1,39 @@
 /* Layout for the grid container (see Grid.tsx).
  *
- * `.grid-container` is a CSS grid that will hold the pinned name column, ruler,
- * and track lane next to the canvas. In M2 it has a single cell — the canvas —
- * so adding the chrome is a matter of growing the template (e.g. a name-column
- * track and ruler/track rows) and placing the canvas cell at bottom-right; the
- * canvas cell itself does not move. */
+ * `.grid-container` is a 2×2 CSS grid: the pinned name column (left) and ruler
+ * (top) frame the virtualized grid canvas (bottom-right), with a corner cell at
+ * their intersection. Track sizes come from `--name-w` / `--ruler-h`, which
+ * Grid.tsx sets from the JS chrome constants (single source of truth). The track
+ * lane lands later as an extra row between the ruler and the grid — the grid cell
+ * stays bottom-right, so it's a template change, not a re-layout. */
 .grid-container {
   display: grid;
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr;
+  grid-template-columns: var(--name-w, 140px) 1fr;
+  grid-template-rows: var(--ruler-h, 22px) 1fr;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   /* Brief fill before the first draw; the canvas paints its own scheme bg. */
-  background: #1f1f1f;
+  background: #fafafa;
+}
+
+/* Chrome cells. The corner is static; the ruler / name canvases are painted by
+ * RulerRenderer / NameColumnRenderer in the shared rAF loop. */
+.grid-corner {
+  background: #eef0f2;
+  border-right: 1px solid #cdd2d6;
+  border-bottom: 1px solid #cdd2d6;
+}
+
+.grid-ruler,
+.grid-names {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* The observed drawing area — its CSS-px size is the viewport extent

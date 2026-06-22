@@ -21,11 +21,22 @@
 // the cell keeps that true once the chrome arrives in the sibling cells.
 
 import { useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
 import type { AlignmentView } from "../model/view";
 import { GridStore } from "../state/store";
 import { Canvas2DRenderer } from "../render/Canvas2DRenderer";
+import { RulerRenderer } from "../render/RulerRenderer";
+import { NameColumnRenderer } from "../render/NameColumnRenderer";
 import { RenderLoop } from "../render/loop";
+import { NAME_W, RULER_H } from "../render/chrome";
 import "./Grid.css";
+
+// CSS vars driven from the JS chrome constants so the grid track sizes and the
+// painters' backing stores share one source of truth (can't drift apart).
+const CHROME_VARS = {
+  "--name-w": `${NAME_W}px`,
+  "--ruler-h": `${RULER_H}px`,
+} as CSSProperties;
 
 // Wheel-zoom sensitivity: factor = exp(-deltaY * k). One ~100px notch ⇒ ~1.22×
 // in / 0.82× out, smooth on trackpads where deltaY is finer-grained.
@@ -39,6 +50,8 @@ interface GridProps {
 export default function Grid({ view }: GridProps) {
   const cellRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rulerRef = useRef<HTMLCanvasElement>(null);
+  const nameRef = useRef<HTMLCanvasElement>(null);
   // Read by the rAF loop each dirty frame and by the view-change effect; kept in
   // a ref so a new alignment never restarts the loop.
   const viewRef = useRef<AlignmentView | null>(null);
@@ -53,19 +66,29 @@ export default function Grid({ view }: GridProps) {
     const cell = cellRef.current!;
     const store = new GridStore();
     const renderer = new Canvas2DRenderer(canvas);
-    const loop = new RenderLoop(store, renderer, () => viewRef.current);
+    const ruler = new RulerRenderer(rulerRef.current!);
+    const names = new NameColumnRenderer(nameRef.current!);
+    // Grid first, then chrome — all painted in one dirty frame, so the ruler /
+    // name column never tear against the grid under pan/zoom.
+    const loop = new RenderLoop(store, [renderer, ruler, names], () => viewRef.current);
     storeRef.current = store;
 
     const dpr = () => globalThis.devicePixelRatio || 1;
 
     // Resize: feed the SAME css w/h to both the renderer (backing store) and the
-    // store (viewport extent) — the contract in `Renderer.ts`. Observing the cell
-    // (not the container) keeps viewW/viewH = drawing area once chrome lands.
-    // The observer fires once on observe() with the initial size → first draw.
+    // store (viewport extent) — the contract in `Renderer.ts`. Observe the grid
+    // CELL only: its size is the viewport extent (viewW/viewH excludes chrome).
+    // The chrome canvases derive from it — ruler spans the grid width at a fixed
+    // height, the name column the grid height at a fixed width — so one observer
+    // sizes everything and the layout can't disagree with the painters. The
+    // observer fires once on observe() with the initial size → first draw.
     const ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
-      renderer.resize(r.width, r.height, dpr());
+      const d = dpr();
+      renderer.resize(r.width, r.height, d);
       store.resize(r.width, r.height);
+      ruler.resize(r.width, RULER_H, d);
+      names.resize(NAME_W, r.height, d);
     });
     ro.observe(cell);
 
@@ -127,6 +150,8 @@ export default function Grid({ view }: GridProps) {
       canvas.removeEventListener("pointerup", endDrag);
       canvas.removeEventListener("pointercancel", endDrag);
       renderer.dispose();
+      ruler.dispose();
+      names.dispose();
       storeRef.current = null;
     };
   }, []);
@@ -139,8 +164,13 @@ export default function Grid({ view }: GridProps) {
     storeRef.current?.setDims(view.width, view.numRows);
   }, [view]);
 
+  // 2×2 layout: corner, ruler (top), name column (left), grid cell (bottom-
+  // right). Auto-placement fills in DOM order. Only the grid cell is observed.
   return (
-    <div className="grid-container">
+    <div className="grid-container" style={CHROME_VARS}>
+      <div className="grid-corner" />
+      <canvas ref={rulerRef} className="grid-ruler" />
+      <canvas ref={nameRef} className="grid-names" />
       <div className="grid-canvas-cell" ref={cellRef}>
         <canvas ref={canvasRef} className="grid-canvas" />
       </div>

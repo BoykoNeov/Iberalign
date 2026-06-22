@@ -9,7 +9,24 @@ import type { AlignmentView } from "../model/view";
 import type { Viewport } from "../state/viewport";
 import type { ColorScheme } from "./colors";
 
-export interface Renderer {
+/**
+ * Anything the rAF loop can paint for the current viewport: the main grid
+ * renderer plus the chrome painters (ruler, name column, …). The loop drives a
+ * `Drawable[]` so every layer repaints in the SAME dirty frame and can't tear
+ * against the others. Sizing/teardown are each painter's own concern (their
+ * `resize` signatures differ — chrome has fixed cross-axis dims), so they stay
+ * off this interface and the container calls them directly.
+ */
+export interface Drawable {
+  /**
+   * Paint the visible window of `view` for `vp` (the current scroll + zoom).
+   * Reads only the buffer and viewport — no IPC, no DOM per cell. Safe to call
+   * every animation frame; a no-op if the target has zero size.
+   */
+  draw(view: AlignmentView, vp: Viewport): void;
+}
+
+export interface Renderer extends Drawable {
   /**
    * Set the on-screen size (CSS px) and device pixel ratio of the grid canvas.
    * Called on mount and from the container's ResizeObserver / dpr change.
@@ -22,13 +39,6 @@ export interface Renderer {
    * get clipped or blank strips (and it passes typecheck silently).
    */
   resize(cssW: number, cssH: number, dpr?: number): void;
-
-  /**
-   * Paint the visible window of `view` for `vp` (the current scroll + zoom).
-   * Reads only the buffer and viewport — no IPC, no DOM per cell. Safe to call
-   * every animation frame; a no-op if the canvas has zero size.
-   */
-  draw(view: AlignmentView, vp: Viewport): void;
 
   /**
    * Switch the residue color scheme. Rebuilds the glyph atlas (lazily, re-inked).
