@@ -20,7 +20,7 @@
 // (origin excludes the name column + ruler — see `state/viewport.ts`). Observing
 // the cell keeps that true once the chrome arrives in the sibling cells.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import type { AlignmentView } from "../model/view";
 import { GridStore } from "../state/store";
@@ -229,6 +229,25 @@ export default function Grid({ view }: GridProps) {
     setHover(null);
   }, [view]);
 
+  // Zoom to an absolute cell size in CSS px (the status-bar slider). There is no
+  // cursor for a slider drag, so anchor the zoom at the viewport CENTRE — the
+  // factor `target/current` makes `zoomAbout` reduce to `clampCell(target)`, i.e.
+  // it reuses the same tested clamp path the wheel uses. Stable identity (refs +
+  // setState only), so it never re-fires the mount effect. Pushes `setZoom`
+  // *unthrottled* so the controlled thumb tracks the drag exactly — one tiny
+  // status-bar render per input event, never per frame — and keeps `lastZoomRef`
+  // in sync so the wheel path's throttle still compares against the right key.
+  const handleZoomTo = useCallback((targetCell: number) => {
+    const store = storeRef.current;
+    if (!store) return;
+    const vp = store.getViewport();
+    if (vp.cellW <= 0) return;
+    store.zoom(targetCell / vp.cellW, vp.viewW / 2, vp.viewH / 2);
+    const { cellW } = store.getViewport();
+    lastZoomRef.current = `${Math.round(cellW * 10) / 10}|${lodFor(cellW)}`;
+    setZoom(cellW);
+  }, []);
+
   // Shell: a flex column holding the pinned-chrome grid (flex:1) over the status
   // bar (auto height). The grid is a 2×2 CSS grid — corner, ruler (top), name
   // column (left), grid cell (bottom-right); auto-placement fills in DOM order,
@@ -245,7 +264,7 @@ export default function Grid({ view }: GridProps) {
           <canvas ref={canvasRef} className="grid-canvas" />
         </div>
       </div>
-      <StatusBar hover={hover} zoom={zoom} />
+      <StatusBar hover={hover} zoom={zoom} onZoomTo={handleZoomTo} />
     </div>
   );
 }
