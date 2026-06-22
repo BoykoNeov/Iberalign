@@ -1,0 +1,43 @@
+/* Layout for the grid container (see Grid.tsx).
+ *
+ * `.grid-container` is a CSS grid that will hold the pinned name column, ruler,
+ * and track lane next to the canvas. In M2 it has a single cell — the canvas —
+ * so adding the chrome is a matter of growing the template (e.g. a name-column
+ * track and ruler/track rows) and placing the canvas cell at bottom-right; the
+ * canvas cell itself does not move. */
+.grid-container {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Brief fill before the first draw; the canvas paints its own scheme bg. */
+  background: #1f1f1f;
+}
+
+/* The observed drawing area — its CSS-px size is the viewport extent
+ * (viewW/viewH). Must size independently of the canvas's device-px backing
+ * store, so the canvas stretches to fill it at 100%. */
+.grid-canvas-cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.grid-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.grid-canvas.dragging {
+  cursor: grabbing;
+}
+
+.grid-canvas:not(.dragging) {
+  cursor: grab;
+}

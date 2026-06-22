@@ -6,7 +6,12 @@ Virtualized Canvas2D grid from the in-memory buffer. See `m2-plan.md` (why) and
 **Status: in progress.** Backend render-buffer IPC + IPC wrapper + frontend
 model/coords (parity-guarded) are landed and green; vitest added as the
 pure-logic test runner. **Canvas core** (colors/glyphs/Renderer/Canvas2DRenderer
-+ rAF loop) is landed and green. Chrome / interactions / app-wiring remain.
++ rAF loop) is landed and green (committed `f4cbff0`). **Grid container** (`ui/
+Grid.tsx`: mounts the canvas, owns store/renderer/rAF loop, ResizeObserver on the
+canvas cell, pan + zoom input) is landed and typecheck/build-green — not yet
+imported (App wiring is its own task), so manual interaction/fps smoke is gated
+on App wiring + the perf fixture. Remaining chrome (name col / ruler / track lane
+/ minimap / status bar / tooltip), keyboard+scrollbar scroll, app-wiring.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -81,8 +86,12 @@ pure-logic test runner. **Canvas core** (colors/glyphs/Renderer/Canvas2DRenderer
 
 ## Chrome (pinned, scroll-synced)
 
-- [ ] Grid container component (mounts the canvas, owns the rAF loop, wires
-      input handlers).
+- [x] Grid container component (`ui/Grid.tsx` + `Grid.css`): mounts the canvas,
+      owns the `GridStore`/`Canvas2DRenderer`/`RenderLoop` (refs, never React
+      state), `ResizeObserver` on the **canvas cell** (viewW/viewH = drawing area,
+      excludes chrome), wires pointer/wheel input. Outer `.grid-container` is a
+      CSS grid that today renders only the canvas cell — chrome lands as child
+      cells (no store lift). StrictMode-safe cleanup (nulls refs).
 - [ ] **Name column** — pinned left, row names, scroll-synced vertically.
 - [ ] **Position ruler** — pinned top, column ticks, scroll-synced horizontally.
 - [ ] Empty **track lane** between ruler and grid — laid out, column-aligned,
@@ -98,12 +107,13 @@ pure-logic test runner. **Canvas core** (colors/glyphs/Renderer/Canvas2DRenderer
 
 ## Interactions
 
-- [ ] **Pan** — drag and wheel-scroll move the viewport (mutate refs → request
-      frame; no setState).
-- [ ] **Zoom** — ctrl/⌘-wheel changes cell size about the cursor; clamp to a
-      min/max; crosses LOD tiers.
+- [x] **Pan** — drag (pointer capture) and wheel-scroll move the viewport via
+      `store.pan` (mutate store → mark dirty; no setState). Wired in `Grid.tsx`.
+- [x] **Zoom** — ctrl/⌘-wheel scales cell size about the cursor via `store.zoom`
+      (clamped `MIN_CELL..MAX_CELL`, crosses LOD tiers). Non-passive native wheel
+      listener so `preventDefault` suppresses page zoom. Wired in `Grid.tsx`.
 - [ ] **Scroll** — keyboard/scrollbar; large alignments reachable to last
-      row/col.
+      row/col. (Lands with the chrome pass alongside the ruler/name column.)
 
 ## App wiring
 
