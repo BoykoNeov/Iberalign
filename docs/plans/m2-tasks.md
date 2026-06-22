@@ -7,11 +7,11 @@ Virtualized Canvas2D grid from the in-memory buffer. See `m2-plan.md` (why) and
 model/coords (parity-guarded) are landed and green; vitest added as the
 pure-logic test runner. **Canvas core** (colors/glyphs/Renderer/Canvas2DRenderer
 + rAF loop) is landed and green (committed `f4cbff0`). **Grid container** (`ui/
-Grid.tsx`: mounts the canvas, owns store/renderer/rAF loop, ResizeObserver on the
-canvas cell, pan + zoom input) is landed and typecheck/build-green — not yet
-imported (App wiring is its own task), so manual interaction/fps smoke is gated
-on App wiring + the perf fixture. Remaining chrome (name col / ruler / track lane
-/ minimap / status bar / tooltip), keyboard+scrollbar scroll, app-wiring.
+Grid.tsx`) + **app wiring** are landed and green, and the **render smoke
+passed** (`tauri dev`: the grid paints, ctrl-wheel zoom crosses LOD tiers) — so
+the full draw path (IPC buffer → view → store → rAF loop → renderer → App) is
+exercised end-to-end. Remaining: chrome (name col / ruler / track lane / minimap
+/ status bar / tooltip), keyboard+scrollbar scroll, the perf fixture + fps smoke.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -124,7 +124,9 @@ on App wiring + the perf fixture. Remaining chrome (name col / ruler / track lan
       shell (the definite-height ancestor `Grid`'s `height:100%` resolves against).
       Open/parse kept as a header bar; summary condensed to a status strip;
       "Close" returns to the landing. Grid is read-only. Typecheck/build-green;
-      **manual render smoke still pending** (needs `npm run tauri dev`).
+      **render smoke passed** (`tauri dev`: sample paints colored letters/gap,
+      status strip correct, ctrl-wheel zoom crosses tiers). Per-frame-IPC / fps
+      smoke still gated on the perf fixture.
 
 ## Perf fixture (acceptance gate)
 
