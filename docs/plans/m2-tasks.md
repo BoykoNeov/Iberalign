@@ -117,9 +117,14 @@ on App wiring + the perf fixture. Remaining chrome (name col / ruler / track lan
 
 ## App wiring
 
-- [ ] `App.tsx` — on successful load, fetch meta + buffer, mount the grid; keep
-      the M1 open/parse flow and summary (or move summary into a panel). Grid is
-      read-only.
+- [x] `App.tsx` — on successful parse/open (both stash the dataset), fetch meta +
+      buffer, build the `AlignmentView` **once** (held in state, not per render —
+      else the grid's `[view]` effect resets scroll every render) and mount
+      `<Grid>` in a flex:1 / min-height:0 grid area under a viewport-height flex
+      shell (the definite-height ancestor `Grid`'s `height:100%` resolves against).
+      Open/parse kept as a header bar; summary condensed to a status strip;
+      "Close" returns to the landing. Grid is read-only. Typecheck/build-green;
+      **manual render smoke still pending** (needs `npm run tauri dev`).
 
 ## Perf fixture (acceptance gate)
 
