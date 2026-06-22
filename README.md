@@ -15,10 +15,10 @@ Windows, Linux, and macOS.
 ## What you can do today
 
 - **Open** a FASTA alignment file.
-- **Explore** it as a smooth, zoomable grid — individual letters up close,
-  colour blocks when smaller, a zoomed-out overview for the whole alignment — and
-  it stays fluid even for very large files. Zoom with the slider in the bottom
-  bar, or hold **Ctrl** (⌘ on macOS) and scroll.
+- **Explore** it as a smooth, zoomable grid — coloured residues up close, a
+  zoomed-out overview for the whole alignment — and it stays fluid even for very
+  large files. Zoom with the slider in the bottom bar, or hold **Ctrl** (⌘ on
+  macOS) and scroll.
 - **Read coordinates while you hover:** the status bar shows the alignment
   column and the sequence position under the cursor, the residue there, and the
   current zoom level.

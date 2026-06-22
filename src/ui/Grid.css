@@ -132,10 +132,14 @@
   flex: 0 0 auto;
 }
 
-/* Zoom slider. `accent-color` is the one-line way to tint the native track-fill
- * and thumb to the app accent in both light and dark schemes (overridden darker-
- * background-friendly below). Fixed width + flex:0 0 auto so it never steals the
- * shrink the name seg needs to ellipsize. */
+/* Zoom slider. Rendered last in the group (StatusBar.tsx) and fixed-width, so it
+ * sits hard against the bar's right edge: with the group right-pinned, the slider
+ * position works out to `barRight − sliderWidth` regardless of the readout text
+ * width, so a digit tick during a drag can't shift it under the cursor.
+ * `accent-color` is the one-line way to tint the native track-fill and thumb to
+ * the app accent in both light and dark schemes (overridden darker-background-
+ * friendly below). flex:0 0 auto so it never steals the shrink the name seg needs
+ * to ellipsize. */
 .status-zoom-slider {
   flex: 0 0 auto;
   width: 110px;
