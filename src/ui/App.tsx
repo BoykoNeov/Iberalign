@@ -1,11 +1,18 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { loadAlignment, parseSummary, type Summary } from "../ipc/commands";
+import {
+  loadAlignment,
+  parseSummary,
+  getAlignmentMeta,
+  getRenderBuffer,
+  type Summary,
+} from "../ipc/commands";
+import { AlignmentView } from "../model/view";
+import Grid from "./Grid";
 import "./App.css";
 
-// A tiny embedded sample so the M0 IPC round-trip is exercisable without a
-// file dialog (that lands in M1). Edit it and re-parse to see the summary
-// update straight from the Rust core.
+// A tiny embedded sample so the IPC round-trip is exercisable without a file
+// dialog. Edit it and parse to see the grid render straight from the Rust core.
 const SAMPLE_FASTA = `>seq1 example
 ACGTACGTACGT
 >seq2
@@ -16,16 +23,29 @@ ACGAACGTA-GT
 
 export default function App() {
   const [text, setText] = useState(SAMPLE_FASTA);
+  // The loaded alignment for the grid. Built ONCE per load (here, in state) — not
+  // in render — so the grid's `[view]` effect doesn't re-fire (and reset scroll)
+  // on every App re-render. `summary` rides alongside for the status strip.
+  const [view, setView] = useState<AlignmentView | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // After a load/parse stashes the dataset in Rust, pull the render metadata +
+  // raw buffer and build the view. The `AlignmentView` constructor asserts
+  // `buffer.length === width*numRows`, so a transport mismatch throws loud here
+  // (caught by the callers) rather than mis-rendering.
+  async function showAlignment(loaded: Summary) {
+    const [meta, buffer] = await Promise.all([getAlignmentMeta(), getRenderBuffer()]);
+    setView(new AlignmentView(buffer, meta));
+    setSummary(loaded);
+  }
 
   async function onParse() {
     setError(null);
     try {
       const bytes = new TextEncoder().encode(text);
-      setSummary(await parseSummary(bytes));
+      await showAlignment(await parseSummary(bytes));
     } catch (e) {
-      setSummary(null);
       setError(String(e));
     }
   }
@@ -42,21 +62,54 @@ export default function App() {
       });
       // `null` when the user cancels the dialog.
       if (typeof selected === "string") {
-        setSummary(await loadAlignment(selected));
+        await showAlignment(await loadAlignment(selected));
       }
     } catch (e) {
-      setSummary(null);
       setError(String(e));
     }
   }
 
+  /** Return to the open/parse screen (keeps the pasted text). */
+  function onClose() {
+    setView(null);
+    setSummary(null);
+  }
+
+  // Loaded: full-viewport shell — header bar + condensed status strip over a
+  // flex-1 grid area. The grid area is the definite-height ancestor `Grid`'s
+  // `height:100%` resolves against (a viewport-height flex column).
+  if (view && summary) {
+    return (
+      <div className="app-shell">
+        <header className="app-header">
+          <span className="app-title">Iberalign</span>
+          <span className="status-strip">
+            {summary.count} sequences · {summary.alphabet} · width {summary.width} ·
+            ungapped {summary.minLen}
+            {summary.minLen !== summary.maxLen ? `..${summary.maxLen}` : ""}
+            {summary.warnings.length > 0
+              ? ` · ⚠ ${summary.warnings.length} warning${summary.warnings.length > 1 ? "s" : ""}`
+              : ""}
+          </span>
+          <span className="header-actions">
+            <button onClick={onOpenFile}>Open file…</button>
+            <button onClick={onClose}>Close</button>
+          </span>
+        </header>
+        <div className="app-grid-area">
+          <Grid view={view} />
+        </div>
+      </div>
+    );
+  }
+
+  // Unloaded: the open/parse landing.
   return (
     <main className="container">
       <h1>Iberalign</h1>
       <p className="subtitle">
-        Multiple sequence alignment viewer/editor. Open a FASTA file (read by
-        the native Rust core), or paste below and parse — the summary is
-        computed in Rust over Tauri IPC.
+        Multiple sequence alignment viewer/editor. Open a FASTA file (read by the
+        native Rust core), or paste below and parse — both load into the grid.
       </p>
 
       <textarea
@@ -73,48 +126,6 @@ export default function App() {
       </div>
 
       {error && <p className="error">Error: {error}</p>}
-
-      {summary && (
-        <table className="summary">
-          <tbody>
-            <tr>
-              <th>Sequences</th>
-              <td>{summary.count}</td>
-            </tr>
-            <tr>
-              <th>Alphabet</th>
-              <td>{summary.alphabet}</td>
-            </tr>
-            <tr>
-              <th>Ungapped length (no gaps)</th>
-              <td>
-                {summary.minLen}..{summary.maxLen}
-              </td>
-            </tr>
-            <tr>
-              <th>Aligned width (with gaps)</th>
-              <td>{summary.width}</td>
-            </tr>
-            <tr>
-              <th>Equal width</th>
-              <td>
-                {summary.equalWidth ? "yes" : "no"}
-                {summary.equalWidth && summary.minLen !== summary.maxLen
-                  ? " (gap-padded)"
-                  : ""}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      )}
-
-      {summary && summary.warnings.length > 0 && (
-        <ul className="warnings">
-          {summary.warnings.map((w, i) => (
-            <li key={i}>{w}</li>
-          ))}
-        </ul>
-      )}
     </main>
   );
 }

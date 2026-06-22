@@ -9,10 +9,73 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* Full-height root so the loaded-view `100vh` shell fills the window with no
+ * stray body margin / scrollbar. */
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+}
+
 .container {
   max-width: 720px;
   margin: 0 auto;
   padding: 2rem 1.5rem;
+}
+
+/* Loaded view: full-viewport flex column. The grid area is flex:1 with
+ * min-height:0 so it (and only it) absorbs the leftover height — that gives
+ * Grid's `height:100%` .grid-container a definite-height ancestor to resolve
+ * against. Without the min-height:0 the flex item refuses to shrink and the
+ * grid would overflow the viewport. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #ccc;
+  flex: 0 0 auto;
+}
+
+.app-title {
+  font-weight: 700;
+}
+
+.status-strip {
+  flex: 1 1 auto;
+  color: #555;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+
+.header-actions button {
+  padding: 0.35em 0.9em;
+  font-size: 0.85rem;
+}
+
+.app-grid-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
 }
 
 h1 {
@@ -84,8 +147,12 @@ button:hover {
     background-color: #2f2f2f;
   }
   .subtitle,
-  .summary th {
+  .summary th,
+  .status-strip {
     color: #aaa;
+  }
+  .app-header {
+    border-bottom-color: #444;
   }
   .fasta-input {
     color: #f6f6f6;
