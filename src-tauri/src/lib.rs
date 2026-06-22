@@ -14,7 +14,9 @@ pub fn run() {
         .manage(Mutex::new(AppState::default()))
         .invoke_handler(tauri::generate_handler![
             commands::parse_summary,
-            commands::load_alignment
+            commands::load_alignment,
+            commands::get_alignment_meta,
+            commands::get_render_buffer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

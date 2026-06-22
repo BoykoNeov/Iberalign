@@ -3,63 +3,81 @@
 Virtualized Canvas2D grid from the in-memory buffer. See `m2-plan.md` (why) and
 `m2-context.md` (where things live).
 
-**Status: not started — plan draft for review.** Nothing checked until the plan
-is accepted.
+**Status: in progress.** Backend render-buffer IPC + IPC wrapper + frontend
+model/coords (parity-guarded) are landed and green; vitest added as the
+pure-logic test runner. **Canvas core** (colors/glyphs/Renderer/Canvas2DRenderer
++ rAF loop) is landed and green. Chrome / interactions / app-wiring remain.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
 
 ## Backend — render-buffer IPC
 
-- [ ] `AlignmentMetaDto { width, num_rows, names, alphabet }` (JSON) — names for
-      the pinned column, alphabet for the color scheme. Decide: fold into
-      `load_alignment`/`parse_summary` return, or a `get_alignment_meta` getter.
-- [ ] `get_render_buffer()` command → **raw bytes** via `tauri::ipc::Response`
+- [x] `AlignmentMetaDto { width, num_rows, names, alphabet }` (JSON) — chose a
+      dedicated `get_alignment_meta` getter (works regardless of load path).
+      Names in row order; `alphabet` is the `widen`-fold over per-seq alphabets,
+      which matches `summarize`.
+- [x] `get_render_buffer()` command → **raw bytes** via `tauri::ipc::Response`
       (flat row-major `width × num_rows` gapped matrix from `AppState.dataset`).
       Errors cleanly when no dataset is loaded. **Not** a JSON `number[]`.
-- [ ] Confirm the exact Tauri 2.11.3 binary-response signature
-      (`tauri::ipc::Response::new(…)`) and that JS `invoke` yields an
-      `ArrayBuffer`. Register the command in `lib.rs`.
-- [ ] Confirm **no** new entry in `capabilities/default.json` is required
-      (app-defined command) — note it in the commit if so.
+- [x] Confirmed: `tauri::ipc::Response::new(Vec<u8>)` — `From<Vec<u8>> for
+      InvokeResponseBody` maps to the `Raw` variant (verified in the 2.11.3
+      source), `Response`'s own `IpcResponse` impl bypasses JSON, so JS `invoke`
+      yields an `ArrayBuffer`. Both commands registered in `lib.rs`.
+- [x] Confirmed **no** new `capabilities/default.json` entry (app-defined
+      commands aren't webview-gated).
 
 ## IPC wrapper (the only `invoke` seam)
 
-- [ ] `src/ipc/commands.ts`: `getRenderBuffer(): Promise<Uint8Array>` (wraps the
-      `ArrayBuffer`), and the meta wrapper (snake_case → camelCase, like
-      `fromWire`). Keep `@tauri-apps/api` imported only here.
+- [x] `src/ipc/commands.ts`: `getRenderBuffer(): Promise<Uint8Array>` (wraps the
+      `ArrayBuffer`) and `getAlignmentMeta()` (snake→camel). `@tauri-apps/api`
+      stays imported only here; `AlignmentMeta` lives in `model/types.ts`.
 
 ## Frontend model + state
 
-- [ ] `src/model/` — TS DTO types; an `AlignmentView` wrapping buffer + meta with
-      `cellAt(row,col)` (byte read) and `rowSlice(row)` helpers.
-- [ ] `src/model/coords.ts` — `colToUngapped(view,row,col) -> number | null`
-      mirroring `coords.rs` (gap→null, gaps excluded, 1-based surface).
-- [ ] **Parity test** — `colToUngapped` cross-checked against engine output on a
-      fixture with known column→position pairs (e.g. via `align-cli`, or a
-      hand-worked fixture). The guard against silent drift.
-- [ ] `src/state/` — non-React store/refs for **buffer** + **viewport**
-      (scroll offsets, cell size/zoom). Pan/zoom/scroll as pure reducers over
-      viewport. **No `useState` for per-frame state.**
+- [x] `src/model/` — `types.ts` (domain `AlignmentMeta`), `view.ts`
+      (`AlignmentView` with `cellAt`/`rowSlice`/`nameAt`; constructor asserts
+      `buffer.length === width*numRows` so a transport mismatch fails loud).
+- [x] `src/model/coords.ts` — `colToUngapped(view,row,col) -> number | null`
+      and `isGap`, mirroring `coords.rs` (gap→null, gaps excluded, 1-based).
+- [x] **Parity test** (`coords.test.ts`) — hand-worked column→position pairs
+      derived straight from `coords.rs` (leading/interior/trailing-gap rows +
+      gapless), plus a residue-count invariant. Guard against silent drift.
+- [x] `src/state/` — non-React store/refs for **viewport** (`viewport.ts`:
+      `Viewport` + pure `clamp`/`pan`/`resize`/`zoomAbout` reducers, CSS-px units;
+      `store.ts`: `GridStore` holds viewport+dims+dirty, continuous-rAF-with-skip
+      contract, every mutator marks dirty). **No `useState` for per-frame state.**
+      Per advisor: the **buffer**/`view` lifts into App state (load is the only
+      coarse event and it originates in a React handler), so the store owns only
+      per-frame state and needs no subscribe machinery yet.
 
 ## Renderer
 
-- [ ] `src/render/viewport.ts` (pure) — visible-window math (first/last
-      row+col + overscan), `colToX`/`xToCol`, `rowToY`/`yToRow`. **Unit-tested.**
-- [ ] `src/render/lod.ts` (pure) — cell px → tier (letter ≥ ~8 / block ~3–8 /
-      density < ~3). **Unit-tested.**
-- [ ] `src/render/colors.ts` — nucleotide scheme, **colorblind-safe palette as
-      default**; a seam to add schemes later (no protein schemes yet).
-- [ ] `src/render/Renderer.ts` — the thin interface (≈`resize`/`draw`/`dispose`).
-- [ ] `src/render/glyphs.ts` — offscreen-canvas **glyph atlas** (each residue
-      pre-rendered once); the letter tier `drawImage`-blits from it instead of
-      `fillText` per cell (the #2 fps killer after per-frame React state).
-- [ ] `src/render/Canvas2DRenderer.ts` — draws the visible window per LOD tier:
-      letter tier (cell + atlas glyph), block tier (cell only), density tier
-      (occupancy/gap-density or averaged-color strip — **no** identity data).
-      Reads the buffer; no per-cell DOM.
-- [ ] Draw loop on `requestAnimationFrame` reading the viewport/buffer refs;
-      redraw only on dirty (pan/zoom/resize/load), not unconditionally.
+- [x] `src/render/viewport.ts` (pure) — visible-window math (first/last
+      row+col + overscan, content-clamped), `colToX`/`xToCol`, `rowToY`/`yToRow`.
+      **Unit-tested** (transform round-trip + window clamping/overscan).
+- [x] `src/render/lod.ts` (pure) — cell px → tier (letter ≥ 8 / block 3–8 /
+      density < 3). **Unit-tested** (boundary-pinned).
+- [x] `src/render/colors.ts` — `ColorScheme` (fill/ink/background/densityStyle),
+      `makeScheme` (256-entry CSS lookup tables, O(1) hot path), case-insensitive,
+      gap/fallback handling. **Selectable**: registry + `registerScheme`/`getScheme`/
+      `listSchemes`; custom palettes via `makeScheme` + `registerScheme`. Two
+      schemes — **colorblind** (Paul Tol
+      *bright*, CVD-safe, DEFAULT) and **classic** (A green/T·U red/C cyan/G
+      magenta). Unit-tested (`colors.test.ts`). *(CVD-simulator pass = final QA.)*
+- [x] `src/render/Renderer.ts` — thin interface `resize`/`draw`/`setColorScheme`/
+      `dispose`. `setColorScheme` doc: caller must `store.markDirty()` to repaint.
+- [x] `src/render/glyphs.ts` — `GlyphAtlas`: detached `<canvas>`, one device-res
+      tile per printable byte at a **reference** size (max cell × dpr) so zoom
+      never rebuilds; `drawImage`-blit per cell; re-ink only on scheme/dpr change.
+- [x] `src/render/Canvas2DRenderer.ts` — visible-window draw per LOD tier in
+      DEVICE px (seam-free `xs[i+1]-xs[i]` rounding): letter (run-merged fills +
+      atlas glyph), block (run-merged fills), density (per-column occupancy bars,
+      **occupancy chosen over averaged-color** → cache keyed by view only, so
+      scheme switch never staleness-bugs it; **no** identity data). No per-cell DOM.
+- [x] Draw loop on `requestAnimationFrame` (`src/render/loop.ts` `RenderLoop`):
+      continuous-rAF-with-skip, draws only on `store.consumeDirty()`. Mechanism
+      here; the grid container will own start/stop lifecycle (chrome task).
 
 ## Chrome (pinned, scroll-synced)
 

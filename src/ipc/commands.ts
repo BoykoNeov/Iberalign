@@ -3,6 +3,9 @@
 // directly, so command names and payload shapes live in one place.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { AlignmentMeta } from "../model/types";
+
+export type { AlignmentMeta };
 
 /** Mirror of the Rust `SummaryDto` returned by `parse_summary`. */
 export interface Summary {
@@ -61,4 +64,37 @@ export async function parseSummary(bytes: Uint8Array): Promise<Summary> {
 export async function loadAlignment(path: string): Promise<Summary> {
   const wire = await invoke<SummaryWire>("load_alignment", { path });
   return fromWire(wire);
+}
+
+interface AlignmentMetaWire {
+  width: number;
+  num_rows: number;
+  names: string[];
+  alphabet: string;
+}
+
+/**
+ * Fetch render metadata (dimensions, row names, alphabet) for the currently
+ * loaded alignment. Small JSON; call once per load alongside
+ * {@link getRenderBuffer}.
+ */
+export async function getAlignmentMeta(): Promise<AlignmentMeta> {
+  const wire = await invoke<AlignmentMetaWire>("get_alignment_meta");
+  return {
+    width: wire.width,
+    numRows: wire.num_rows,
+    names: wire.names,
+    alphabet: wire.alphabet,
+  };
+}
+
+/**
+ * Fetch the flat gapped render buffer — a row-major `width × numRows` byte
+ * matrix (row `r` is bytes `[r*width, (r+1)*width)`). The command returns raw
+ * bytes, so `invoke` yields an `ArrayBuffer` (NOT a JSON `number[]`); we wrap it
+ * in a `Uint8Array`. Call once per load; never per frame.
+ */
+export async function getRenderBuffer(): Promise<Uint8Array> {
+  const buf = await invoke<ArrayBuffer>("get_render_buffer");
+  return new Uint8Array(buf);
 }
