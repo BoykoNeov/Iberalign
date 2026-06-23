@@ -11,8 +11,29 @@
 
 import type { AlignmentView } from "../model/view";
 import type { Viewport } from "../state/viewport";
+import type { Cell } from "../state/selection";
 import { xToCol, yToRow } from "../render/viewport";
 import { colToUngapped, isGap } from "../model/coords";
+
+/**
+ * The cell under a grid-canvas cursor point `(ax, ay)` (CSS px, local to the grid
+ * canvas — origin excludes the name column + ruler), or `null` when the point is
+ * outside the drawing area or off the content (overscan past the last row/col).
+ *
+ * The ONE pixel → cell mapping: `computeHover` (status-bar readout) and the
+ * click→select handler in `Grid.tsx` both go through here, so a hover and a click
+ * at the same pixel always resolve to the same cell.
+ */
+export function cellAtPixel(view: AlignmentView, vp: Viewport, ax: number, ay: number): Cell | null {
+  // Outside the drawing area entirely (e.g. over the chrome, or a stale coord
+  // during resize). xToCol/yToRow would still return an index, so guard the box.
+  if (ax < 0 || ay < 0 || ax >= vp.viewW || ay >= vp.viewH) return null;
+  const col = xToCol(vp, ax);
+  const row = yToRow(vp, ay);
+  // Off the content — overscan/empty space past the last row or column.
+  if (row < 0 || row >= view.numRows || col < 0 || col >= view.width) return null;
+  return { row, col };
+}
 
 /**
  * The cell under the cursor, resolved across all three coordinate spaces (spec
@@ -49,15 +70,9 @@ export function computeHover(
   ax: number,
   ay: number,
 ): HoverInfo | null {
-  // Outside the drawing area entirely (e.g. the pointer is over the chrome, or a
-  // stale coordinate during resize). xToCol/yToRow would still return an index,
-  // so guard the box explicitly.
-  if (ax < 0 || ay < 0 || ax >= vp.viewW || ay >= vp.viewH) return null;
-
-  const col = xToCol(vp, ax);
-  const row = yToRow(vp, ay);
-  // Off the content — overscan/empty space past the last row or column.
-  if (row < 0 || row >= view.numRows || col < 0 || col >= view.width) return null;
+  const hit = cellAtPixel(view, vp, ax, ay);
+  if (!hit) return null;
+  const { row, col } = hit;
 
   const byte = view.cellAt(row, col);
   return {

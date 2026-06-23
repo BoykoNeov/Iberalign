@@ -119,11 +119,16 @@ overlay scrollbars).
   every mutator marks dirty; `setDims` clears it.
 - Cursor move **+ scroll-into-view is one atomic mutation**, following the active
   end.
-- Mouse: click selects, **Shift+click extends, left-drag stays pan** (threshold
-  tells click from drag). Keyboard arrows **move the cursor** (replacing
-  arrow-pan); Shift+arrows extend.
-- Rendering via an **overlay canvas + `SelectionLayer`** (not in
-  `Canvas2DRenderer`); same RO entry/dpr as the grid canvas.
+- Mouse (**revised 2026-06-23**): click selects, **left-drag rubber-band selects,
+  pan moved to middle-drag** (threshold tells click from drag; Shift+click/Shift+drag
+  extend). Keyboard arrows **move the cursor** (replacing arrow-pan); Shift+arrows
+  extend.
+- Rendering (**revised 2026-06-23**) via **two overlay canvases + one
+  `SelectionLayer`** (not in `Canvas2DRenderer`): an invert canvas
+  (`mix-blend-mode: difference` → color-inversion) and a non-blending border canvas
+  above it (thick **black** border). `SelectionLayer` sizes both in one `resize`
+  with the same RO entry/dpr as the grid canvas; z-index grid 0 / invert 1 / border
+  2 / scrollbars 3.
 - **No new Tauri capability** in this batch. (Phase-2 copy adds
   `clipboard-manager:allow-write-text` + the plugin — that is the one capability
   this whole feature needs, and it lands with copy, not now.)

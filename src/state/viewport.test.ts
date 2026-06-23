@@ -13,6 +13,7 @@ import {
   scrollTo,
   resize,
   zoomAbout,
+  scrollIntoView,
   contentWidth,
   contentHeight,
   MIN_CELL,
@@ -163,5 +164,50 @@ describe("zoomAbout — the content point under the cursor is preserved", () => 
     expect(vp.cellW).toBe(vp.cellH);
     expect(vp.viewW).toBe(640);
     expect(vp.viewH).toBe(480);
+  });
+});
+
+describe("scrollIntoView — minimal scroll so the cell box is visible", () => {
+  // interior() shows cols 20..49 (scrollX 200, view 300, cell 10) and rows
+  // 10..29 (scrollY 100, view 200, cell 10).
+  it("does not move when the cell is already fully inside", () => {
+    const vp = scrollIntoView(interior(), DIMS, { row: 15, col: 30 });
+    expect(vp.scrollX).toBe(200);
+    expect(vp.scrollY).toBe(100);
+  });
+
+  it("scrolls left so a cell off the left edge sits at the view's left", () => {
+    // col 5 → left edge 50, which is < scrollX 200 ⇒ scrollX becomes 50.
+    const vp = scrollIntoView(interior(), DIMS, { row: 15, col: 5 });
+    expect(vp.scrollX).toBe(50);
+    expect(vp.scrollY).toBe(100); // y untouched (row already visible)
+  });
+
+  it("scrolls right so a cell off the right edge sits at the view's right", () => {
+    // col 60 → right edge 610; view right is 200+300=500 ⇒ scrollX = 610-300 = 310.
+    const vp = scrollIntoView(interior(), DIMS, { row: 15, col: 60 });
+    expect(vp.scrollX).toBe(310);
+    expect(vp.scrollY).toBe(100);
+  });
+
+  it("scrolls up for a cell above the view", () => {
+    // row 3 → top edge 30 < scrollY 100 ⇒ scrollY = 30.
+    const vp = scrollIntoView(interior(), DIMS, { row: 3, col: 30 });
+    expect(vp.scrollY).toBe(30);
+    expect(vp.scrollX).toBe(200);
+  });
+
+  it("scrolls down for a cell below the view", () => {
+    // row 35 → bottom edge 360; view bottom 100+200=300 ⇒ scrollY = 360-200 = 160.
+    const vp = scrollIntoView(interior(), DIMS, { row: 35, col: 30 });
+    expect(vp.scrollY).toBe(160);
+  });
+
+  it("clamps at the content edge (the last cell can't over-scroll)", () => {
+    // Last cell (row 39, col 99). The minimal scroll would push past the content,
+    // so clamp pins it to the bottom-right extent.
+    const vp = scrollIntoView(interior(), DIMS, { row: 39, col: 99 });
+    expect(vp.scrollX).toBe(contentWidth(vp, DIMS) - vp.viewW);
+    expect(vp.scrollY).toBe(contentHeight(vp, DIMS) - vp.viewH);
   });
 });

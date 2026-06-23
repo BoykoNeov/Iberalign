@@ -14,6 +14,10 @@
 // canvas's left edge (not the window's), and those chrome elements never enter
 // this math.
 
+// Type-only import (erased at emit, so no runtime cycle with `selection.ts`,
+// which imports `Dims` from here): `scrollIntoView` follows a selection `Cell`.
+import type { Cell } from "./selection";
+
 /** Alignment dimensions in cells. Content size is derived from these + cell px. */
 export interface Dims {
   cols: number;
@@ -98,6 +102,27 @@ export function scrollTo(vp: Viewport, dims: Dims, x: number, y: number): Viewpo
  *  may now fit entirely, a larger view may expose past the old max scroll). */
 export function resize(vp: Viewport, dims: Dims, viewW: number, viewH: number): Viewport {
   return clamp({ ...vp, viewW, viewH }, dims);
+}
+
+/**
+ * Minimal scroll so a cell's box is fully inside the visible window, then clamp.
+ * Used by the cursor movers (`GridStore.moveCursor`/`extendActive`) so the
+ * active end stays on screen as it moves — in the SAME mutation as the selection
+ * change, one dirty mark, one redraw. Only scrolls the axes where the cell is
+ * outside the view (so an already-visible cursor doesn't jolt the view), and
+ * follows the cell that's passed (the caller follows `active`, the moving end).
+ */
+export function scrollIntoView(vp: Viewport, dims: Dims, cell: Cell): Viewport {
+  const left = cell.col * vp.cellW;
+  const right = left + vp.cellW;
+  const top = cell.row * vp.cellH;
+  const bottom = top + vp.cellH;
+  let { scrollX, scrollY } = vp;
+  if (left < scrollX) scrollX = left;
+  else if (right > scrollX + vp.viewW) scrollX = right - vp.viewW;
+  if (top < scrollY) scrollY = top;
+  else if (bottom > scrollY + vp.viewH) scrollY = bottom - vp.viewH;
+  return clamp({ ...vp, scrollX, scrollY }, dims);
 }
 
 /**

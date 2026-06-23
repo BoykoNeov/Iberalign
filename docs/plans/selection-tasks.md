@@ -1,73 +1,106 @@
 # Selection — Tasks (cursor + rectangular selection)
 
 The selection foundation. See `selection-plan.md` (why) and `selection-context.md`
-(where things live). **Status: planned, not started** — to be implemented in a
-later session. Builds on `b8664e2` (keyboard nav + overlay scrollbars).
+(where things live). **Status: code complete + green; GUI smoke PASSED
+(user-confirmed 2026-06-23); committed.** Builds on `b8664e2` (keyboard nav +
+overlay scrollbars). Implemented with advisor review — the key correction was that
+`moveCursor` must COLLAPSE to a single cell at `active+delta` (not move both
+rectangle ends independently); Home/End/corner reuse the cursor movers with a `FAR`
+delta (the existing scroll-handler idiom) so the row helpers weren't needed.
 
-**Done when:** click selects a cell; arrows move the cursor with the view
-following; Shift+arrows/Shift+click grow/shrink a rectangle; the selection is
-drawn (translucent fill + active-cell outline) on the shared rAF loop; the pure
-selection reducers are unit-tested; pan/zoom/scrollbars unregressed.
+**Two plan reversals settled during the GUI smoke (2026-06-23, user-requested):**
+**(a) mouse** — left-drag now rubber-band selects, **pan moved to middle-drag**;
+**(b) look** — selection is **color-inversion + a thick black border** (two overlay
+canvases), not the translucent fill + outline first planned. A vivid residue palette
++ always-black letters (`render/colors.ts`) also landed alongside.
+
+**Done when:** click selects a cell; left-drag rubber-bands a rectangle; arrows move
+the cursor with the view following; Shift+arrows/Shift+click grow/shrink a
+rectangle; the selection is drawn (color-inversion + thick black border) on the
+shared rAF loop; the pure selection reducers are unit-tested; pan (middle-drag /
+wheel / scrollbars) / zoom unregressed.
 
 ## Model (pure, unit-tested)
 
-- [ ] `src/state/selection.ts` — `Cell`, `Selection { anchor, active }`,
+- [x] `src/state/selection.ts` — `Cell`, `Selection { anchor, active }`,
       `CellRect { r0,r1,c0,c1 }` (inclusive). Reducers (all clamp to dims):
-      `setCursor`, `moveCursor` (move both ends, collapse), `extendActive` (move
-      active, keep anchor), `setActive`, `selectAll`, `collapseSelection`,
-      `normalize → CellRect`, `rectDims`, row-start/row-end helpers (Home/End).
-- [ ] `src/state/selection.test.ts` — clamp at edges; `normalize` with flipped
-      anchor/active; move/extend stop at borders; select-all spans full dims;
-      single-cell when anchor == active.
+      `setCursor`, `moveCursor` (**collapse** to `active+delta`), `extendActive`
+      (move active, keep anchor), `setActive`, `selectAll`, `collapseSelection`,
+      `normalize → CellRect`, `rectDims`. **Row-start/row-end helpers dropped** —
+      Home/End fall out of `moveCursor(0, ±FAR)` (clamped), matching the existing
+      keyboard idiom; `moveCursor`/`extendActive` defensively seed `(0,0)` on null.
+- [x] `src/state/selection.test.ts` — clamp at edges; `normalize` with flipped
+      anchor/active; **multi-cell rect + plain arrow collapses to one cell**;
+      move/extend stop at borders; `FAR` delta reaches the last cell; select-all
+      spans full dims; single-cell when anchor == active.
 
 ## Scroll-into-view (pure)
 
-- [ ] `src/state/viewport.ts` — `scrollIntoView(vp, dims, cell) → Viewport`:
+- [x] `src/state/viewport.ts` — `scrollIntoView(vp, dims, cell) → Viewport`:
       minimal scroll so the cell's box is fully inside the view, then `clamp`.
-- [ ] `src/state/viewport.test.ts` — cell above/below/left/right/inside →
+- [x] `src/state/viewport.test.ts` — cell above/below/left/right/inside →
       expected minimal offset; clamps at content edges.
 
 ## Store integration
 
-- [ ] `src/state/store.ts` — add `selection: Selection | null` + `getSelection()`.
+- [x] `src/state/store.ts` — added `selection: Selection | null` + `getSelection()`.
       Mutators: `setCursor`, `setActive`, `moveCursor`, `extendActive`,
-      `selectAll`, `collapseSelection`, `clearSelection`. Each marks dirty.
+      `selectAll`, `collapseSelection`, `clearSelection` (via a private
+      `setSelection(next, viewport?)` write path; always marks dirty).
       `moveCursor`/`extendActive` also update the viewport via `scrollIntoView`
       (following `active`) **in one mutation** (one dirty mark).
-- [ ] `src/state/store.ts` — `setDims` resets `selection = null` (clear on load).
-- [ ] `src/state/store.test.ts` — cursor set/move/extend mark dirty + clamp;
+- [x] `src/state/store.ts` — `setDims` resets `selection = null` (clear on load).
+- [x] `src/state/store.test.ts` — cursor set/move/extend mark dirty + clamp;
       move scrolls the active end into view; `setDims` clears selection.
 
 ## Rendering
 
-- [ ] `src/render/SelectionLayer.ts` — `Drawable` (model on `ScrollbarsLayer.ts`).
-      Constructor `(overlayCanvas, getSelection: () => Selection | null)`. `draw`
-      reads selection, computes rect px from `colToX`/`rowToY` + `cellW`/`cellH`,
-      fills translucent accent (~0.18 alpha), strokes the active cell stronger.
-      No-op when selection is null or canvas has zero size.
-- [ ] `src/ui/Grid.tsx` — add `selRef` overlay `<canvas className="grid-selection"
-      />` in `.grid-canvas-cell` (between grid canvas and scrollbar divs); build
-      `new SelectionLayer(selRef.current, () => store.getSelection())`; add it to
-      the `RenderLoop` drawables; resize it in the `ResizeObserver` with the same
-      cssW/cssH/dpr as the grid canvas; dispose/cleanup as needed.
-- [ ] `src/ui/Grid.css` — `.grid-selection { position:absolute; inset:0;
-      pointer-events:none; z-index:1; }` (below the scrollbars at z-index 2).
+- [x] `src/render/SelectionLayer.ts` — `Drawable` owning **two** overlay canvases.
+      Constructor `(invertCanvas, borderCanvas, getSelection: () => Selection |
+      null)`; `resize(cssW, cssH, dpr)` sizes BOTH in one call (no desync). `draw`
+      reads selection, computes rect px from `colToX`/`rowToY` (same `round(* dpr)`
+      snapping as the grid), then: **(1)** fills the rect solid white on the invert
+      canvas (CSS `mix-blend-mode: difference` → `255 − backdrop`), clearing the
+      active cell in a multi-cell rect (Excel idiom; skipped for a single cell);
+      **(2)** paints a thick **black** border (`BORDER`/`BORDER_PX`, four device-px
+      inset strips capped to half the smaller side) on the non-blending border
+      canvas. No-op when selection is null or a canvas has zero size; both contexts
+      `clearRect` each frame.
+- [x] `src/ui/Grid.tsx` — added `selRef` (`.grid-selection`) **and** `selBorderRef`
+      (`.grid-selection-border`) overlay canvases in `.grid-canvas-cell`; builds
+      `new SelectionLayer(selRef.current, selBorderRef.current, () =>
+      store.getSelection())`; added to the `RenderLoop` drawables (one entry, paints
+      both); the single `selection.resize(...)` in the `ResizeObserver` (same
+      cssW/cssH/dpr as the grid canvas) sizes both canvases; `dispose()` in cleanup.
+- [x] `src/ui/Grid.css` — `.grid-selection` (z-index 1, `mix-blend-mode:
+      difference`) + `.grid-selection-border` (z-index 2, no blend); both
+      `position:absolute; inset:0; pointer-events:none;`. `.grid-canvas-cell` is
+      `isolation: isolate` (confines the blend to the grid canvas). Scrollbars
+      bumped z-index 2 → 3. `.grid-canvas` cursor: `cell` (idle) / `grabbing` (mid
+      middle-drag pan).
 
 ## Mouse
 
-- [ ] `src/ui/Grid.tsx` — click-vs-drag threshold (~4 px): record pointerdown
-      pos; mark "moved" in `onPointerMove` past the threshold; on `pointerup`, if
-      not moved → click. Click → `store.setCursor(cell)`; Shift+click →
-      `store.setActive(cell)`. Pixel→cell via `xToCol`/`yToRow` + range guard
-      (reuse `hover.ts` logic / a shared helper). **Left-drag pan unchanged.**
+- [x] `src/ui/Grid.tsx` — **revised 2026-06-23: left-drag selects, middle-drag
+      pans.** Two pointer modes by button: left (0) = select, middle (1) = pan.
+      Click-vs-drag threshold (4 px): a left press releasing under it → click →
+      `store.setCursor(cell)` (Shift+click → `setActive`); past it → rubber-band
+      (anchor at the down cell, `setActive` to the cell under the pointer each move;
+      Shift+drag keeps the anchor). Middle-drag = the old grab-and-drag pan; `mousedown`
+      `preventDefault` on button 1 kills WebView2 autoscroll. Pixel→cell via the
+      shared `cellAtPixel` (factored out of `computeHover` in `hover.ts`). Wheel +
+      scrollbars still pan.
 
-## Keyboard (rework the `b8664e2` handler — arrows no longer pan)
+## Keyboard (reworked the `b8664e2` handler — arrows no longer pan)
 
-- [ ] `src/ui/Grid.tsx` — Arrow → `moveCursor`; Shift+Arrow → `extendActive`;
-      Home/End → row ends (Shift extends); Ctrl/⌘+Home/End → first/last cell
-      (Ctrl/⌘+Shift+End extends); PageUp/Down → cursor by a page of rows; Esc →
-      collapse; Ctrl/⌘+A → select all. Seed the initial cursor at the **top-left
-      visible cell** when no selection exists. Only handled keys `preventDefault`.
+- [x] `src/ui/Grid.tsx` — Arrow → `moveCursor`; Shift+Arrow → `extendActive`;
+      Home/End → `moveCursor(0, ±FAR)` row ends (Shift extends); Ctrl/⌘+Home/End →
+      first/last cell via `moveCursor(±FAR, ±FAR)` (Ctrl/⌘+Shift+Home/End extend);
+      PageUp/Down → cursor by a page of rows; Esc → collapse; Ctrl/⌘+A → select
+      all. Absolute jumps (Ctrl+Home/End/A) handled **before** the seed path so
+      Ctrl+End with no selection reaches the last cell. Seeds the initial cursor at
+      the **top-left visible cell** (no move) on first relative-nav press. Only
+      handled keys `preventDefault`.
 
 ## Phase 2 — copy (SEPARATE batch, not the foundation)
 
@@ -95,11 +128,17 @@ selection reducers are unit-tested; pan/zoom/scrollbars unregressed.
 
 ## Verify + wrap
 
-- [ ] `npm run typecheck && npm run build` green; vitest green (new selection +
-      scroll-into-view + store tests).
-- [ ] Manual GUI smoke (`tauri dev`): click selects; arrows move the cursor and
-      the view follows; Shift+arrows and Shift+click grow/shrink the rectangle;
-      Ctrl+End cursor reaches the last cell; pan/zoom/scrollbars unregressed;
-      selection clears on loading a new file.
-- [ ] Batch-end ritual: update these docs + `CLAUDE.md` milestone status +
-      memory; commit (Conventional Commits) + push; CI green.
+- [x] `npm run typecheck && npm run build` green; vitest green (**144 tests** incl.
+      new selection + scroll-into-view + store + vivid-palette cases).
+- [x] Manual GUI smoke (`tauri dev`) — **PASSED (user-confirmed 2026-06-23),**
+      across the iteration that settled the look (tooltip → tint → inversion-only →
+      inversion + black border) and the mouse remap (left-drag select / middle-drag
+      pan). Confirmed: click selects; left-drag rubber-bands; arrows move the cursor
+      with the view scroll-following; Shift+arrows/Shift+click grow/shrink the rect;
+      Ctrl+End/Home/A + Esc behave; middle-drag pans (no WebView2 autoscroll); the
+      **inversion + thick black border** reads on the vivid palette; black residue
+      letters; single-cell vs multi-cell active-cell behavior. (Per-scheme contrast
+      is now moot — inversion is scheme-independent, so the old "bump FILL alpha"
+      note no longer applies.)
+- [x] Batch-end ritual: updated these docs + `CLAUDE.md` milestone status + memory;
+      commit (Conventional Commits) + push; CI green.

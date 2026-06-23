@@ -11,9 +11,27 @@ This batch pulls the **selection foundation** ahead of M4 at the user's request.
 It is *not* all of M5 — only the cursor + rectangle + rendering + input. Copy is
 the immediate Phase-2 follow-up; delete and the rest of editing stay in M5.
 
-**Status: planned, not started.** Design accepted (with advisor review). To be
-implemented in a later session. The keyboard/scrollbar work it builds on top of
-landed in `b8664e2`.
+**Status: code complete + green; GUI smoke PASSED (user-confirmed 2026-06-23);
+committed.** Design accepted (with advisor review) and implemented (foundation only
+— copy is the separate Phase 2 below). The keyboard/scrollbar work it builds on top
+of landed in `b8664e2`. Implementation note: `moveCursor` collapses to a single cell
+at `active+delta` (advisor catch — see the tasks doc); Home/End/corner reuse the
+cursor movers with a `FAR` delta, so the planned row-start/row-end reducers proved
+unnecessary.
+
+**Revised during GUI smoke (2026-06-23), at the user's request — two plan
+reversals, both deliberate:**
+- **Mouse:** left-drag now **rubber-band selects**; **pan moved to middle-drag**
+  (the plan below kept left-drag = pan and listed rubber-band drag-select as out of
+  scope — both reversed). Click (< 4px) still sets the cursor; Shift+click/arrow
+  still extend.
+- **Look:** the selection **color-inverts** the cells beneath it (`mix-blend-mode:
+  difference`) with a **thick black border** on a second, non-blending overlay
+  canvas above the inverting one — not the translucent-tint fill + active-cell
+  outline Decision 5 originally specified. (Decisions 3 and 5 below are updated to
+  match; the original text is preserved in git history.)
+- Also landed alongside (separate concern, no plan section): a **vivid residue
+  palette** default + **always-black glyph letters** in `render/colors.ts`.
 
 ## Goal
 
@@ -23,10 +41,12 @@ rectangular selection in any of the four directions. Shift+click extends the
 rectangle with the mouse. The selection is the substrate for **copy** (Phase 2),
 **delete**, and other future operations.
 
-**Done when:** clicking selects a cell; arrows move the cursor with the view
-following; Shift+arrows/Shift+click grow/shrink a rectangle; the selection is
-drawn (translucent fill + active-cell outline) on the shared rAF loop; the
-pure selection reducers are unit-tested; nothing regresses pan/zoom/scrollbars.
+**Done when:** clicking selects a cell; left-drag rubber-bands a rectangle; arrows
+move the cursor with the view following; Shift+arrows/Shift+click grow/shrink a
+rectangle; the selection is drawn (color-inversion + thick black border, see
+Decision 5 as revised) on the shared rAF loop; the pure selection reducers are
+unit-tested; nothing regresses pan/zoom/scrollbars (pan now on middle-drag + wheel
++ scrollbars).
 
 ## Scope fence
 
@@ -67,9 +87,10 @@ pure selection reducers are unit-tested; nothing regresses pan/zoom/scrollbars.
   select the whole column; click a name → select the whole row). A natural
   extension of the same rectangle model (extend to full height / full width) —
   Phase 2/3, not the foundation.
-- **Rubber-band drag-select** — would require moving pan onto middle-/space-drag.
-  Left-drag-pan was explicitly praised; keep it. Shift+click covers mouse
-  block-selection. Revisit only if asked.
+- ~~**Rubber-band drag-select**~~ — **ADOPTED during the GUI smoke (2026-06-23).**
+  Originally out (it requires moving pan off left-drag); the user asked for it, so
+  pan moved to **middle-drag** and left-drag now rubber-bands a rectangle. See the
+  revised Decision 3.
 - **Multiple disjoint selections** (Ctrl+click columns, Jalview-style) — later.
 - **Subset selection driving consensus/diff** — that is M4's use of selection,
   not this batch.
@@ -122,16 +143,23 @@ mark dirty — exactly what `GridStore` is for. Put it there:
 
 ### 3. Interaction model
 
-**Mouse** (on the grid canvas, which owns pointer/wheel today):
-- Tell **click apart from drag** with a small movement threshold (~4 CSS px).
-  Record the pointerdown position; if the pointer moves past the threshold it is a
-  **pan** (existing behavior, unchanged — don't touch the selection); if it
-  releases under the threshold it is a **click**.
+**Mouse** (on the grid canvas, which owns pointer/wheel today). *Revised
+2026-06-23: left-drag selects, pan moved to middle-drag.*
+- Two buttons, two gestures: **left (0) = SELECT**, **middle (1, wheel pressed) =
+  PAN** (the grab-and-drag gesture left-drag used in M2). `dragging` class (→
+  `grabbing` cursor) shows only while panning; the default cursor is `cell`.
+- Tell **click apart from drag** with a ~4 CSS px movement threshold. A left press
+  releasing under the threshold is a **click**; past it, a **rubber-band drag**.
 - Click → `store.setCursor(cell)` (collapse). Already takes keyboard focus.
-- **Shift+click** → `store.setActive(cell)` (extend the rectangle from the
-  existing anchor; seed an anchor at the clicked cell if none).
-- Map pixel→cell with the **existing** `xToCol`/`yToRow` (+ the same range-check
-  `computeHover` does). Do not duplicate the math.
+- **Left-drag** → anchor at the down cell, then `store.setActive(cell-under-pointer)`
+  each move (a plain drag anchors at the start cell; a **Shift+drag** keeps the
+  existing anchor and only moves the active end).
+- **Shift+click** → `store.setActive(cell)` (extend the rectangle from the existing
+  anchor; seed an anchor at the clicked cell if none).
+- `mousedown` `preventDefault` on **button 1** suppresses WebView2/Chromium
+  middle-click autoscroll (preventDefault on `pointerdown` does not).
+- Map pixel→cell with the **shared** `cellAtPixel` (factored out of `computeHover`).
+  Do not duplicate the math.
 
 **Keyboard** (reworks the handler from `b8664e2`; arrows no longer pan):
 - Arrow → `store.moveCursor(dr, dc)` (move cursor, collapse, scroll active into
@@ -150,9 +178,10 @@ mark dirty — exactly what `GridStore` is for. Put it there:
   `(0,0)` off-screen.
 - Only handled keys `preventDefault` (leave unbound keys to the browser).
 
-**Pan is preserved** on left-drag, wheel, and the scrollbar thumbs. Arrow-key
-*panning* is the only thing replaced (by cursor movement). Pure viewport panning
-without a cursor is still available via wheel/drag/scrollbar.
+**Pan is preserved** on **middle-drag** (revised — was left-drag), wheel, and the
+scrollbar thumbs. Arrow-key *panning* was replaced (by cursor movement) and
+left-drag was repurposed to rubber-band select. Pure viewport panning without a
+cursor is still available via middle-drag/wheel/scrollbar.
 
 ### 4. Cursor move + scroll-into-view is ONE atomic store mutation
 
@@ -171,32 +200,48 @@ end, not the anchor** (on Shift+arrow the anchor is stationary). Unit-test
 `scrollIntoView` (cell above/below/left/right/already-inside → expected minimal
 offset; clamps at edges).
 
-### 5. Rendering — overlay canvas + `SelectionLayer` Drawable
+### 5. Rendering — overlay canvases + `SelectionLayer` Drawable
 
-A separate `render/SelectionLayer.ts` implementing `Drawable`, painting onto an
-**overlay `<canvas>`** stacked above the grid canvas inside `.grid-canvas-cell`
-(same pattern as the scrollbar thumbs / ruler / name canvases — and better than
-threading selection into `Canvas2DRenderer`, whose `draw(view, vp)` has no
-selection slot).
+*Revised 2026-06-23 during the GUI smoke: the look is **color-inversion + a thick
+black border**, on TWO stacked overlay canvases, not the translucent-tint fill +
+outline this section originally specified. (The tint and an inversion-only no-border
+variant were both tried and dropped; a floating tooltip was tried and dropped too.)*
 
-- `Drawable.draw(view, vp)` carries no selection, so construct the layer with a
-  getter: `new SelectionLayer(overlayCanvas, () => store.getSelection())`. It
-  reads the selection in `draw`, computes the rectangle's screen px from
-  `colToX`/`rowToY` + `cellW`/`cellH`, fills it translucent (accent, ~0.18
-  alpha), and strokes the **active cell** with a stronger outline. Canvas clips
-  rectangles that run off-screen — just draw.
-- Add it to the `RenderLoop` drawables array (order doesn't affect layering — it
-  is a separate stacked canvas, ordered by z-index/DOM — but include it so it
-  repaints every dirty frame).
-- **Pixel alignment:** size the overlay from the **same** `ResizeObserver` entry
-  with the **same** cssW/cssH/dpr as the grid canvas, or the rectangle drifts a
-  sub-pixel off the cells. Overlay CSS: `position:absolute; inset:0;
-  pointer-events:none;` z-index **between** the grid (0) and the scrollbar thumbs
-  (2), so clicks fall through to the grid canvas.
-- **Honesty note:** any selection change marks the store dirty, so the grid
-  canvas redraws that frame too. The overlay does **not** save grid redraws — it
-  is for layering/separation, not a perf optimization. (Cost is negligible; the
-  grid already redraws on pan/zoom.)
+A single `render/SelectionLayer.ts` implementing `Drawable` owns **two** overlay
+`<canvas>`es stacked above the grid canvas inside `.grid-canvas-cell` (better than
+threading selection into `Canvas2DRenderer`, whose `draw(view, vp)` has no selection
+slot):
+
+- **Invert canvas** (`.grid-selection`, z-index 1) — CSS `mix-blend-mode:
+  difference`. The layer fills the selection rectangle solid **white**, which the
+  blend composites to `255 − backdrop` per channel: a true photographic negative of
+  the residue cells (fills *and* black letters flip). `.grid-canvas-cell` is
+  `isolation: isolate` so the blend is confined to the grid canvas directly below,
+  not the page/chrome. Reads "selected" on any scheme/zoom with no color choice.
+- **Border canvas** (`.grid-selection-border`, z-index 2) — **NO** blend mode,
+  stacked above the invert canvas, so a **thick black border** holds a CONSTANT
+  color (a border on the difference-blend canvas would itself invert and couldn't
+  hold one color — hence the second canvas). Drawn as four device-px-aligned inset
+  strips fully inside the rect; thickness capped to half the smaller side so a tiny
+  selection fills solid rather than overdraws. Constants `BORDER` (`#000000`) /
+  `BORDER_PX` (3 CSS px) at the top of the file.
+- **Active cell:** in a *multi-cell* rect the active cell's white is cleared
+  (`clearRect`) so the one cell shows its true "live" color inside the inverted
+  block (Excel idiom). Skipped for a *single-cell* cursor — clearing the lone cell
+  would erase the only inverted pixels and it would vanish, so a single cell just
+  inverts.
+- Construct with a getter: `new SelectionLayer(invertCanvas, borderCanvas, () =>
+  store.getSelection())`. Add it to the `RenderLoop` drawables array (one entry; its
+  `draw` paints both canvases) so it repaints every dirty frame.
+- **Pixel alignment + the two-canvas footgun:** `SelectionLayer.resize` sizes BOTH
+  canvases in one call with the **same** cssW/cssH/dpr as the grid canvas (from the
+  same `ResizeObserver` entry), so they can't desync and the rect can't drift a
+  sub-pixel off the cells. Both canvases: `position:absolute; inset:0;
+  pointer-events:none;`. Z-index: grid 0 / invert 1 / border 2 / **scrollbar thumbs
+  bumped to 3**.
+- **Honesty note:** any selection change marks the store dirty, so the grid canvas
+  redraws that frame too. The overlays do **not** save grid redraws — they are for
+  layering/separation, not perf. (Cost is a few fills.)
 
 ### 6. Delete / edit semantics — deferred, but designed-for
 

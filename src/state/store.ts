@@ -25,17 +25,31 @@ import {
   scrollTo,
   resize,
   zoomAbout,
+  scrollIntoView,
 } from "./viewport";
+import {
+  type Selection,
+  setCursor as selSetCursor,
+  setActive as selSetActive,
+  moveCursor as selMoveCursor,
+  extendActive as selExtendActive,
+  selectAll as selSelectAll,
+  collapseSelection as selCollapse,
+} from "./selection";
 
 export class GridStore {
   private viewport: Viewport;
   private dims: Dims;
   private dirty: boolean;
+  // The cursor + rectangular selection (store-only — no React mirror; the rAF
+  // loop's SelectionLayer reads it each dirty frame). `null` ⇒ nothing selected.
+  private selection: Selection | null;
 
   constructor() {
     this.viewport = initViewport();
     this.dims = { cols: 0, rows: 0 };
     this.dirty = false;
+    this.selection = null;
   }
 
   /** Snapshot of the current viewport (read by the rAF draw loop each tick). */
@@ -61,10 +75,17 @@ export class GridStore {
     this.dirty = true;
   }
 
+  /** Snapshot of the current selection (read by the SelectionLayer each frame). */
+  getSelection(): Selection | null {
+    return this.selection;
+  }
+
   /** Set the loaded alignment's dimensions (call on load), reset the scroll to
-   *  the origin, and re-clamp. Marks dirty so the new alignment paints. */
+   *  the origin, clear any selection (it pointed at the old alignment's rows),
+   *  and re-clamp. Marks dirty so the new alignment paints. */
   setDims(cols: number, rows: number): void {
     this.dims = { cols, rows };
+    this.selection = null;
     this.mutate(clamp({ ...this.viewport, scrollX: 0, scrollY: 0 }, this.dims));
   }
 
@@ -89,7 +110,69 @@ export class GridStore {
     this.mutate(zoomAbout(this.viewport, this.dims, factor, ax, ay));
   }
 
-  /** The single write path: swap in the next viewport and always mark dirty. */
+  // ---- selection ---------------------------------------------------------
+  //
+  // Each selection mutator runs the matching pure reducer against the current
+  // `dims` and marks dirty (same discipline as the viewport mutators — a missed
+  // dirty is the classic "didn't repaint" bug). `moveCursor`/`extendActive` ALSO
+  // scroll the active (moving) end into view in the SAME mutation, so a key press
+  // is one redraw with no flash. The pointer setters (`setCursor`/`setActive`) do
+  // NOT scroll — the clicked cell is already under the cursor.
+
+  /** Collapse to a single cursor at `(row, col)` — a click. No scroll. */
+  setCursor(row: number, col: number): void {
+    this.setSelection(selSetCursor(row, col, this.dims));
+  }
+
+  /** Extend the rectangle to `(row, col)` keeping the anchor — Shift+click. No
+   *  scroll (the cell is under the cursor). */
+  setActive(row: number, col: number): void {
+    this.setSelection(selSetActive(this.selection, row, col, this.dims));
+  }
+
+  /** Move the cursor by `(dr, dc)`, collapsing the rectangle, and scroll the
+   *  cursor into view — arrows / Page (and `FAR` deltas for Home/End/corner). */
+  moveCursor(dr: number, dc: number): void {
+    const next = selMoveCursor(this.selection, dr, dc, this.dims);
+    this.setSelection(next, scrollIntoView(this.viewport, this.dims, next.active));
+  }
+
+  /** Extend the rectangle's active end by `(dr, dc)` and scroll it into view —
+   *  Shift+arrows / Shift+Page (and `FAR` deltas for Shift+Home/End/corner). */
+  extendActive(dr: number, dc: number): void {
+    const next = selExtendActive(this.selection, dr, dc, this.dims);
+    this.setSelection(next, scrollIntoView(this.viewport, this.dims, next.active));
+  }
+
+  /** Select the whole alignment (Ctrl/⌘+A). No scroll. */
+  selectAll(): void {
+    this.setSelection(selSelectAll(this.dims));
+  }
+
+  /** Collapse the rectangle to its active cell (Esc). No-op when nothing is
+   *  selected. */
+  collapseSelection(): void {
+    if (!this.selection) return;
+    this.setSelection(selCollapse(this.selection));
+  }
+
+  /** Drop the selection entirely. No-op (no redraw) when already empty. */
+  clearSelection(): void {
+    if (this.selection === null) return;
+    this.selection = null;
+    this.dirty = true;
+  }
+
+  /** The single selection write path: swap in the next selection (and optionally
+   *  a scrolled viewport, for cursor moves) and always mark dirty. */
+  private setSelection(next: Selection, viewport?: Viewport): void {
+    this.selection = next;
+    if (viewport) this.viewport = viewport;
+    this.dirty = true;
+  }
+
+  /** The single viewport write path: swap in the next viewport and always mark
+   *  dirty. */
   private mutate(next: Viewport): void {
     this.viewport = next;
     this.dirty = true;

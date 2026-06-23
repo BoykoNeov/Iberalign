@@ -99,13 +99,40 @@ dependency-light and surface toolchain/linker issues fast.
   `render/scrollbar.ts` + a `ScrollbarsLayer` `Drawable`); `viewport.ts` gained
   the `scrollTo` clamped absolute-scroll reducer. Remaining: track lane, minimap.
   Plan/context/tasks in `docs/plans/m2-*`.
-- **Selection (M5 slice) — planned, not started.** Spreadsheet-style cursor +
-  rectangular selection (click selects; arrows move the cursor with the view
-  scroll-following; Shift+arrows / Shift+click extend a rect), as the foundation
-  for copy (Phase 2: Tauri `clipboard-manager`) and delete/edit (rest of M5,
-  reversible Rust `EditCmd`). Pulled ahead of M4 at user request. **NB:** the
-  implementing batch reworks the arrow keys from *panning* (M2) to *cursor
-  movement*. Full design in `docs/plans/selection-{plan,context,tasks}.md`.
+- **Selection (M5 slice) — code complete + green; GUI smoke PASSED, committed.**
+  Spreadsheet-style cursor + rectangular selection (click selects; **left-drag
+  rubber-bands a rect**; arrows move the cursor with the view scroll-following;
+  Shift+arrows / Shift+click extend a rect), the foundation for copy (Phase 2: Tauri
+  `clipboard-manager`) and delete/edit (rest of M5, reversible Rust `EditCmd`).
+  Pulled ahead of M4 at user request. Landed (typecheck/build/vitest green, 144
+  tests): pure model `state/selection.ts` (`moveCursor` COLLAPSES to `active+delta`;
+  reducers clamp to dims); pure `viewport.scrollIntoView`; store selection state +
+  mutators (move/extend scroll the active end into view atomically; `setDims` clears
+  it); `render/SelectionLayer.ts` and the **arrow keys reworked from panning (M2) →
+  cursor movement** (Home/End/corner via a clamped `FAR` delta — last cell still
+  reachable; `cellAtPixel` factored out of `hover.ts`).
+  **Look (settled during GUI smoke, user-confirmed 2026-06-23):** the selection
+  COLOR-INVERTS the cells beneath it (overlay canvas with CSS `mix-blend-mode:
+  difference` → `255 − backdrop`; `.grid-canvas-cell` is `isolation: isolate` so the
+  blend hits only the grid canvas), with a **thick black border** on a SECOND,
+  non-blending canvas stacked above (one `SelectionLayer` owns + sizes both canvases
+  in one `resize`; z-index grid 0 / invert 1 / border 2 / scrollbars 3; border
+  constants `BORDER`/`BORDER_PX` in `SelectionLayer.ts`). In a multi-cell rect the
+  active cell's white is cleared so it shows its true color (a single-cell cursor
+  just inverts). Tried then dropped along the way: a floating tooltip, a
+  translucent-tint fill, an inversion-only no-border look — current = inversion +
+  black border. **Mouse remap (also this batch):** left-drag = rubber-band select,
+  **middle-drag = pan** (reverses the plan's "left-drag stays pan"); a left press
+  under a 4px threshold is a click → cursor; Shift+click/Shift+arrow extend; wheel +
+  scrollbars still pan; `mousedown` `preventDefault` on button 1 kills WebView2
+  middle-click autoscroll. Phase 2 (copy) and delete/edit are separate, not done.
+  Full design + status in `docs/plans/selection-{plan,context,tasks}.md`.
+- **Residue palette — vivid default + always-black glyph ink (this batch).**
+  `render/colors.ts`: `VIVID_SCHEME` is the default (A green `#22C32A`, C azure
+  `#2E90FF`, G yellow `#FFD21A`, T/U red `#FF2A2A`); `CLASSIC_SCHEME` (conventional)
+  and `COLORBLIND_SCHEME` (CVD-safe) remain selectable via the registry. Glyph ink
+  is a single black (`GLYPH_INK`) for every residue/scheme — `inkStyleFor` is now a
+  uniform table. Asserted in `colors.test.ts` (`DEFAULT_SCHEME_ID === "vivid"`).
 
 ## Dev-docs
 

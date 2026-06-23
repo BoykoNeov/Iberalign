@@ -28,13 +28,14 @@ import { Canvas2DRenderer } from "../render/Canvas2DRenderer";
 import { RulerRenderer } from "../render/RulerRenderer";
 import { NameColumnRenderer } from "../render/NameColumnRenderer";
 import { ScrollbarsLayer } from "../render/ScrollbarsLayer";
+import { SelectionLayer } from "../render/SelectionLayer";
 import { layoutScrollbars, scrollForThumbPos, SCROLLBAR_THICKNESS } from "../render/scrollbar";
 import { RenderLoop } from "../render/loop";
 import { lodFor } from "../render/lod";
 import type { Dims } from "../state/viewport";
 import { DEFAULT_CELL } from "../state/viewport";
 import { NAME_W, RULER_H } from "../render/chrome";
-import { computeHover, type HoverInfo } from "./hover";
+import { computeHover, cellAtPixel, type HoverInfo } from "./hover";
 import StatusBar from "./StatusBar";
 import "./Grid.css";
 
@@ -53,6 +54,24 @@ const CHROME_VARS = {
 // in / 0.82× out, smooth on trackpads where deltaY is finer-grained.
 const ZOOM_SENSITIVITY = 0.002;
 
+// Pointer travel (CSS px) past which a press is a PAN, not a click. Under it, the
+// release selects the cell; over it, left-drag pans (unchanged from M2).
+const DRAG_THRESHOLD = 4;
+
+// Keys that move the cursor RELATIVE to its current cell (so when there's no
+// selection yet they instead seed the cursor at the top-left visible cell). The
+// absolute jumps (Ctrl/⌘+Home/End/A) are handled before this and act regardless.
+const RELATIVE_NAV = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+]);
+
 interface GridProps {
   /** The loaded alignment. Non-null: `App` mounts `Grid` only once a view exists. */
   view: AlignmentView;
@@ -63,6 +82,8 @@ export default function Grid({ view }: GridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rulerRef = useRef<HTMLCanvasElement>(null);
   const nameRef = useRef<HTMLCanvasElement>(null);
+  const selRef = useRef<HTMLCanvasElement>(null);
+  const selBorderRef = useRef<HTMLCanvasElement>(null);
   const vThumbRef = useRef<HTMLDivElement>(null);
   const hThumbRef = useRef<HTMLDivElement>(null);
   // Read by the rAF loop each dirty frame and by the view-change effect; kept in
@@ -99,11 +120,24 @@ export default function Grid({ view }: GridProps) {
     const renderer = new Canvas2DRenderer(canvas);
     const ruler = new RulerRenderer(rulerRef.current!);
     const names = new NameColumnRenderer(nameRef.current!);
+    // Two canvases: the invert canvas (mix-blend-mode: difference) and the
+    // non-blending border canvas stacked above it — SelectionLayer owns and sizes
+    // both, so one `selection.resize(...)` below keeps them in lockstep.
+    const selection = new SelectionLayer(
+      selRef.current!,
+      selBorderRef.current!,
+      () => store.getSelection(),
+    );
     const scrollbars = new ScrollbarsLayer(vThumbRef.current!, hThumbRef.current!);
-    // Grid first, then chrome, then the scrollbar thumbs — all updated in one
-    // dirty frame, so the thumbs / ruler / name column never lag the grid under
-    // pan/zoom.
-    const loop = new RenderLoop(store, [renderer, ruler, names, scrollbars], () => viewRef.current);
+    // Grid first, then chrome, then the selection overlay, then the scrollbar
+    // thumbs — all updated in one dirty frame, so they never lag the grid under
+    // pan/zoom. (Stacking is by z-index/DOM, not array order; the order just keeps
+    // the selection repainting every dirty frame alongside the grid.)
+    const loop = new RenderLoop(
+      store,
+      [renderer, ruler, names, selection, scrollbars],
+      () => viewRef.current,
+    );
     storeRef.current = store;
 
     const dpr = () => globalThis.devicePixelRatio || 1;
@@ -122,6 +156,9 @@ export default function Grid({ view }: GridProps) {
       store.resize(r.width, r.height);
       ruler.resize(r.width, RULER_H, d);
       names.resize(NAME_W, r.height, d);
+      // Same css w/h/dpr as the grid canvas (it overlays it exactly) — else the
+      // selection rectangle drifts a sub-pixel off the cells.
+      selection.resize(r.width, r.height, d);
     });
     ro.observe(cell);
 
@@ -169,91 +206,187 @@ export default function Grid({ view }: GridProps) {
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
 
-    // Drag-pan with pointer capture so a drag that leaves the canvas keeps going.
-    let dragging = false;
+    // Pointer model (two buttons, two gestures):
+    //   - LEFT (0) = SELECT. A press releasing under DRAG_THRESHOLD is a click →
+    //     set the cursor (Shift+click extends from the existing anchor). Past the
+    //     threshold it's a rubber-band drag → anchor at the down cell, then extend
+    //     the active end to the cell under the pointer each move (Shift+drag keeps
+    //     the existing anchor and only moves the active end).
+    //   - MIDDLE (1, the wheel pressed) = PAN — grab-and-drag the view (the gesture
+    //     left-drag used in M2). The `dragging` class (→ grabbing cursor) shows only
+    //     while panning; the default cursor is `cell` (select). `onMouseDown` below
+    //     kills the WebView2 middle-click autoscroll.
+    // Pointer capture keeps either gesture alive past the canvas edge.
+    type PointerMode = "none" | "select" | "pan";
+    let mode: PointerMode = "none";
+    let moved = false;
+    let downShift = false;
+    let anchored = false; // rubber-band anchor placed (after crossing the threshold)
+    let startX = 0;
+    let startY = 0;
     let lastX = 0;
     let lastY = 0;
+
+    // The cell under a viewport-space cursor (window px), or null off-grid. Reads
+    // the live viewport/view so it reflects pan/zoom already applied this event.
+    const cellAt = (clientX: number, clientY: number) => {
+      const v = viewRef.current;
+      if (!v) return null;
+      const rect = canvas.getBoundingClientRect();
+      return cellAtPixel(v, store.getViewport(), clientX - rect.left, clientY - rect.top);
+    };
+
+    // Chromium (WebView2) starts middle-click autoscroll on the middle mousedown;
+    // preventDefault THERE suppresses it — preventDefault on `pointerdown` does not.
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 1) e.preventDefault();
+    };
     const onPointerDown = (e: PointerEvent) => {
-      if (e.button !== 0) return;
-      // Take keyboard focus so arrows/Page/Home/End scroll the grid (the cell is
-      // tabIndex=0). preventScroll: it's already on screen — don't let the browser
-      // nudge the layout to "reveal" it.
+      if (e.button !== 0 && e.button !== 1) return; // ignore right / extra buttons
+      // Take keyboard focus so arrows/Page/Home/End drive the cursor (the cell is
+      // tabIndex=0). preventScroll: it's already on screen — don't nudge the layout.
       cell.focus({ preventScroll: true });
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
+      moved = false;
+      startX = lastX = e.clientX;
+      startY = lastY = e.clientY;
       canvas.setPointerCapture(e.pointerId);
-      canvas.classList.add("dragging");
+      if (e.button === 0) {
+        mode = "select";
+        downShift = e.shiftKey;
+        anchored = false;
+      } else {
+        mode = "pan";
+        canvas.classList.add("dragging");
+      }
     };
     const onPointerMove = (e: PointerEvent) => {
-      if (dragging) {
+      if (mode === "pan") {
         // Grab-and-drag: moving the pointer right reveals content to the left, so
         // scroll moves opposite the pointer delta.
         store.pan(lastX - e.clientX, lastY - e.clientY);
         lastX = e.clientX;
         lastY = e.clientY;
+      } else if (mode === "select") {
+        if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) > DRAG_THRESHOLD) {
+          moved = true;
+        }
+        if (moved) {
+          const hit = cellAt(e.clientX, e.clientY);
+          if (hit) {
+            if (!anchored) {
+              // Begin the rubber-band: a plain drag anchors at the down cell; a
+              // Shift+drag keeps the existing anchor and only moves the active end.
+              if (!downShift) {
+                const start = cellAt(startX, startY);
+                if (start) store.setCursor(start.row, start.col);
+              }
+              anchored = true;
+            }
+            store.setActive(hit.row, hit.col);
+          }
+        }
       }
       // Hover tracks every move (panning moves the cell under the cursor too).
       updateHover(e.clientX, e.clientY);
     };
-    // Pointer left the canvas (and not mid-capture): drop the readout.
+    // Pointer left the canvas (and not mid-gesture): drop the readout.
     const onPointerLeave = () => {
-      if (dragging) return;
+      if (mode !== "none") return;
       lastCellRef.current = null;
       setHover(null);
     };
-    const endDrag = (e: PointerEvent) => {
-      if (!dragging) return;
-      dragging = false;
+    const endPointer = (e: PointerEvent) => {
+      if (mode === "none") return;
+      // A left press that never crossed the drag threshold is a click; a cancel is
+      // never a click.
+      const wasClick = mode === "select" && !moved && e.type === "pointerup";
+      mode = "none";
       if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
       canvas.classList.remove("dragging");
+      if (!wasClick) return;
+      const hit = cellAt(e.clientX, e.clientY);
+      if (!hit) return;
+      // Shift+click extends the rectangle from the existing anchor; a plain click
+      // collapses to a single-cell cursor.
+      if (e.shiftKey) store.setActive(hit.row, hit.col);
+      else store.setCursor(hit.row, hit.col);
     };
+    canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerup", endDrag);
-    canvas.addEventListener("pointercancel", endDrag);
+    canvas.addEventListener("pointerup", endPointer);
+    canvas.addEventListener("pointercancel", endPointer);
     canvas.addEventListener("pointerleave", onPointerLeave);
 
-    // Keyboard scroll (cell is focusable). Arrows nudge a cell; Page steps a
-    // viewport; Home/End jump to the row's left/right extreme; Ctrl/⌘+Home/End to
-    // the alignment's top-left / bottom-right corner — the latter is what makes
-    // the LAST row/col always reachable without a drag. Absolute jumps use a huge
-    // target and lean on `store.scrollTo`'s clamp; only handled keys
-    // `preventDefault` (so an unbound key still does its normal thing).
+    // Keyboard cursor movement (cell is focusable). Arrows move the cursor (the
+    // M2 arrow-PAN is gone — see selection-plan.md); Shift+arrows extend the
+    // rectangle; Page moves a page of rows; Home/End jump to the row's left/right
+    // extreme; Ctrl/⌘+Home/End to the alignment's first/last cell; Esc collapses;
+    // Ctrl/⌘+A selects all. Home/End/corner reuse the cursor movers with a `FAR`
+    // delta the reducers clamp to the edge (same idiom the old scroll handler
+    // used) — so the LAST row/col stays reachable, now via the cursor + its
+    // scroll-into-view. Only handled keys `preventDefault`.
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!viewRef.current) return;
-      const vp = store.getViewport();
+      const v = viewRef.current;
+      if (!v) return;
       const corner = e.ctrlKey || e.metaKey;
-      // A "page" is a viewport less one cell of overlap, never below one cell.
-      const pageY = Math.max(vp.cellH, vp.viewH - vp.cellH);
-      const FAR = Number.MAX_SAFE_INTEGER; // clamped to the content edge by scrollTo
-      switch (e.key) {
-        case "ArrowUp":
-          store.pan(0, -vp.cellH);
-          break;
-        case "ArrowDown":
-          store.pan(0, vp.cellH);
-          break;
-        case "ArrowLeft":
-          store.pan(-vp.cellW, 0);
-          break;
-        case "ArrowRight":
-          store.pan(vp.cellW, 0);
-          break;
-        case "PageUp":
-          store.pan(0, -pageY);
-          break;
-        case "PageDown":
-          store.pan(0, pageY);
-          break;
-        case "Home":
-          store.scrollTo(0, corner ? 0 : vp.scrollY);
-          break;
-        case "End":
-          store.scrollTo(FAR, corner ? FAR : vp.scrollY);
-          break;
-        default:
-          return; // unhandled — leave it for the browser
+      const shift = e.shiftKey;
+      const FAR = Number.MAX_SAFE_INTEGER; // clamped to the content edge by the reducers
+
+      // Absolute commands first — they act regardless of whether a selection
+      // exists yet (so Ctrl+End with no selection reaches the last cell, it
+      // doesn't seed top-left).
+      if (corner && (e.key === "a" || e.key === "A")) {
+        store.selectAll();
+      } else if (corner && e.key === "Home") {
+        if (shift) store.extendActive(-FAR, -FAR);
+        else store.moveCursor(-FAR, -FAR); // first cell (0,0)
+      } else if (corner && e.key === "End") {
+        if (shift) store.extendActive(FAR, FAR);
+        else store.moveCursor(FAR, FAR); // last cell
+      } else if (e.key === "Escape") {
+        store.collapseSelection();
+      } else if (store.getSelection() === null && RELATIVE_NAV.has(e.key)) {
+        // First navigation with nothing selected: place the cursor at the top-left
+        // VISIBLE cell (on screen, not (0,0) off-screen) and don't move yet.
+        const vp = store.getViewport();
+        const r = Math.min(Math.max(0, Math.floor(vp.scrollY / vp.cellH)), v.numRows - 1);
+        const c = Math.min(Math.max(0, Math.floor(vp.scrollX / vp.cellW)), v.width - 1);
+        store.setCursor(r, c);
+      } else {
+        const vp = store.getViewport();
+        // A "page" is a viewport of rows less one of overlap, never below one row.
+        const pageRows = Math.max(1, Math.floor(vp.viewH / vp.cellH) - 1);
+        const move = (dr: number, dc: number) =>
+          shift ? store.extendActive(dr, dc) : store.moveCursor(dr, dc);
+        switch (e.key) {
+          case "ArrowUp":
+            move(-1, 0);
+            break;
+          case "ArrowDown":
+            move(1, 0);
+            break;
+          case "ArrowLeft":
+            move(0, -1);
+            break;
+          case "ArrowRight":
+            move(0, 1);
+            break;
+          case "PageUp":
+            move(-pageRows, 0);
+            break;
+          case "PageDown":
+            move(pageRows, 0);
+            break;
+          case "Home":
+            move(0, -FAR); // row start
+            break;
+          case "End":
+            move(0, FAR); // row end
+            break;
+          default:
+            return; // unhandled — leave it for the browser
+        }
       }
       e.preventDefault();
     };
@@ -330,10 +463,11 @@ export default function Grid({ view }: GridProps) {
       loop.stop();
       ro.disconnect();
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", endDrag);
-      canvas.removeEventListener("pointercancel", endDrag);
+      canvas.removeEventListener("pointerup", endPointer);
+      canvas.removeEventListener("pointercancel", endPointer);
       canvas.removeEventListener("pointerleave", onPointerLeave);
       cell.removeEventListener("keydown", onKeyDown);
       vThumb.removeEventListener("pointerdown", onVThumbDown);
@@ -347,6 +481,7 @@ export default function Grid({ view }: GridProps) {
       renderer.dispose();
       ruler.dispose();
       names.dispose();
+      selection.dispose();
       storeRef.current = null;
     };
   }, []);
@@ -399,9 +534,16 @@ export default function Grid({ view }: GridProps) {
           ref={cellRef}
           tabIndex={0}
           role="application"
-          aria-label="Alignment grid — drag, scroll, or use arrow / Page / Home / End keys to navigate"
+          aria-label="Alignment grid — click to select a cell, drag to select a range; arrow / Page / Home / End move the cursor (Shift extends the selection); middle-drag or scroll to pan"
         >
           <canvas ref={canvasRef} className="grid-canvas" />
+          {/* Selection overlay (two canvases, both painted by SelectionLayer each
+              dirty frame, both pointer-events:none so clicks fall through to the
+              grid). The invert canvas (mix-blend-mode: difference) flips the residue
+              colors under the selection; the border canvas above it (no blend mode)
+              holds the constant-color thick accent border. */}
+          <canvas ref={selRef} className="grid-selection" />
+          <canvas ref={selBorderRef} className="grid-selection-border" />
           {/* Floating overlay scrollbars: positioned each dirty frame by
               ScrollbarsLayer (style only), drag-handled in the mount effect. */}
           <div ref={vThumbRef} className="grid-scrollbar grid-scrollbar-v" />

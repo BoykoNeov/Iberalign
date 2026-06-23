@@ -53,9 +53,15 @@
 
 /* The observed drawing area — its CSS-px size is the viewport extent
  * (viewW/viewH). Must size independently of the canvas's device-px backing
- * store, so the canvas stretches to fill it at 100%. */
+ * store, so the canvas stretches to fill it at 100%.
+ *
+ * `isolation: isolate` makes this cell its own stacking context so the selection
+ * overlay's `mix-blend-mode: difference` blends ONLY against the grid canvas
+ * directly beneath it (the residue colors it inverts), not against the app chrome
+ * or page behind. */
 .grid-canvas-cell {
   position: relative;
+  isolation: isolate;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -72,6 +78,42 @@
   outline-offset: -2px;
 }
 
+/* Selection overlay — two stacked canvases, both painted by SelectionLayer and
+ * both `pointer-events: none` so clicks fall through to the grid canvas (which owns
+ * the pointer/wheel listeners). Both are sized in JS (device-px backing store) from
+ * the same ResizeObserver entry as the grid canvas, so neither can drift a sub-pixel
+ * off the cells.
+ *
+ * `.grid-selection` (z-index 1) is the INVERT canvas: stacked above the static grid
+ * canvas, it flips the residue colors under the selection via `mix-blend-mode:
+ * difference` (composites the white SelectionLayer paints to `255 − backdrop`, a
+ * true negative), confined to the grid canvas beneath by the cell's `isolation:
+ * isolate`.
+ *
+ * `.grid-selection-border` (z-index 2) is the BORDER canvas: stacked ABOVE the
+ * invert canvas with NO blend mode, so the thick border it paints shows its
+ * constant color rather than inverting against the residues (a border on the
+ * difference-blend canvas would itself invert). It sits below the scrollbar thumbs
+ * (now z-index 3). */
+.grid-selection {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  mix-blend-mode: difference;
+  width: 100%;
+  height: 100%;
+}
+
+.grid-selection-border {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  width: 100%;
+  height: 100%;
+}
+
 /* Floating overlay scrollbars. ScrollbarsLayer toggles `display` and sets the
  * long-axis size + transform each dirty frame; CSS owns the look + the pinned
  * edge + the short-axis thickness (one source of truth via --scrollbar-thickness,
@@ -80,7 +122,7 @@
 .grid-scrollbar {
   position: absolute;
   display: none;
-  z-index: 2;
+  z-index: 3;
   border-radius: 999px;
   background: rgba(60, 64, 70, 0.4);
   cursor: pointer;
@@ -121,12 +163,14 @@
   height: 100%;
 }
 
+/* Default affordance is SELECT (left-drag rubber-bands a rectangle); the
+ * `grabbing` hand shows only while a middle-button drag is panning. */
 .grid-canvas.dragging {
   cursor: grabbing;
 }
 
 .grid-canvas:not(.dragging) {
-  cursor: grab;
+  cursor: cell;
 }
 
 /* Status bar — the pinned readout strip at the bottom of the shell. Matches the
