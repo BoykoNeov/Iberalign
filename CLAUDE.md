@@ -139,13 +139,32 @@ dependency-light and surface toolchain/linker issues fast.
   selection-change listener (the coarse React mirror the selection foundation
   reserved) drives a new top **`ui/Toolbar`** (Sel readout + Copy button + Raw|FASTA
   toggle + ephemeral message); `Ctrl/⌘+C` triggers the same path. **Paste + cut are
-  the M5 EDIT FOUNDATION** (reversible `EditCmd` + undo stack + changed-rows buffer
-  patch — `edit.rs::apply` is still `todo!()`), split into Batches B (foundation),
-  C (paste), D (cut). User-decided semantics (paste default = insert / shift-only-
-  pasted-rows; shift-all toggle keeps the alignment; cut mask-vs-shorten toggle;
-  alphabet warn) and the model-fit proof (all modes legal via equal-width +
-  trailing-pad) live in `docs/plans/copy-paste-{plan,context,tasks}.md`. Open: cut
-  default (mask vs shorten).
+  the M5 EDIT FOUNDATION**, split into Batches B (foundation), C (paste), D (cut).
+  User-decided semantics (paste default = insert / shift-only-pasted-rows; shift-all
+  toggle keeps the alignment; **cut default = shorten**, mask is the toggle; alphabet
+  warn) and the model-fit proof (all modes legal via equal-width + trailing-pad) live
+  in `docs/plans/copy-paste-{plan,context,tasks}.md`.
+- **Edit foundation (Batch B) — code complete + green; GUI smoke pending.** The
+  reversible-edit machinery paste/cut/delete all build on. `align-core::edit`:
+  `apply → Result<EditOutcome{inverse, changed_rows}, EditError>` is now real
+  (**atomic** — validates every write before mutating) with the first concrete
+  command `SetCells` (in-place overwrite; the inverse replays in reverse so
+  overlapping writes round-trip); `EditStack` is an undo/redo history **over a
+  `Dataset`** — `apply_to_dataset` wraps the matrix apply and **resyncs the derived
+  ungapped `Sequence.residues`** for changed rows (so undo is lossless on derived
+  state; nothing reads residues in B2, but features/export would). `AppState` gained
+  `history: EditStack`, reset on every load. IPC: `clear_cells`/`undo_edit`/
+  `redo_edit` return the **full post-edit render buffer** as raw bytes (same
+  transport as `get_render_buffer`) — the changed-rows binary patch was dropped as a
+  B2-only orphan (C/D change width and rebuild the view anyway). Frontend:
+  `ipc/edit.ts` + `AlignmentView.replaceContents` (in-place buffer copy ⇒ same view
+  object ⇒ **scroll + selection survive** the edit), and in `Grid` **Delete/Backspace
+  = clear-to-gap** (the first reversible edit; spreadsheet-style mask, doubles as
+  cut-mask), `Ctrl/⌘+Z` undo, `Ctrl/⌘+Shift+Z` / `Ctrl/⌘+Y` redo — all serialized via
+  an `editingRef` in-flight guard (held-key safety). No new capability (custom app
+  commands aren't capability-gated). NB **Delete-to-gap is a new user-facing key**;
+  full-buffer-per-edit is fine at the design target, heavy only at the 10k×10k
+  ceiling.
 - **Residue palette — vivid default + always-black glyph ink (this batch).**
   `render/colors.ts`: `VIVID_SCHEME` is the default (A green `#22C32A`, C azure
   `#2E90FF`, G yellow `#FFD21A`, T/U red `#FF2A2A`); `CLASSIC_SCHEME` (conventional)

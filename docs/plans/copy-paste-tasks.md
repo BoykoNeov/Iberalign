@@ -19,13 +19,41 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       Ctrl/⌘+C) → paste into a text editor; check Raw vs FASTA, gaps kept, the Sel
       readout, the size-guard message on select-all of a big fixture.
 
-## Batch B — Edit foundation (NEXT)
+## Batch B — Edit foundation ✅ (code complete + green; GUI smoke pending)
 
-- [ ] **B1** `edit.rs::apply → EditOutcome{inverse, changed_rows}` + undo/redo stack
-      in `AppState`; first concrete cmd `SetCells` (overwrite) + tests (apply/inverse
-      round-trip, width preserved, caches invalidated).
-- [ ] **B2** IPC `apply_edit`/`undo`/`redo`; changed-rows render-buffer patch on the
-      frontend (`AlignmentView` + `markDirty`); `Ctrl+Z`/`Ctrl+Y` in `Grid`.
+- [x] **B1** `edit.rs`: `apply → Result<EditOutcome{inverse, changed_rows}, EditError>`
+      (atomic — validates all writes before mutating); first concrete cmd `SetCells`
+      (in-place overwrite, inverse replays in reverse for overlaps); `EditStack`
+      undo/redo history over a **`Dataset`** (`apply_to_dataset` wraps the matrix
+      apply + **resyncs derived ungapped residues** for changed rows so undo is
+      lossless on derived state); `AppState{dataset, history}`, history reset on load.
+      12 align-core tests (round-trip, width preserved, atomicity, overlap inverse,
+      undo/redo, redo-fork, residue resync).
+- [x] **B2** IPC `clear_cells`/`undo_edit`/`redo_edit` returning the **full post-edit
+      render buffer** as raw bytes (advisor #1 — dropped the hand-rolled changed-rows
+      binary patch; C/D change width and rebuild anyway, so the patch was a B2-only
+      orphan). Frontend `ipc/edit.ts` + `AlignmentView.replaceContents` (in-place copy,
+      same buffer object ⇒ scroll + selection survive). `Grid`: **Delete/Backspace →
+      clear-to-gap** (the first reversible edit; doubles as cut-mask), `Ctrl/⌘+Z` undo,
+      `Ctrl/⌘+Shift+Z` / `Ctrl/⌘+Y` redo, all serialized via an `editingRef` in-flight
+      guard. Empty buffer ⇒ no-op ⇒ skip repaint. 2 view tests + 1 commands test.
+- [x] Verify: align-core 12 ✓ + clippy ✓; `cargo test -p iberalign` 5 ✓; typecheck ✓,
+      154 vitest ✓, `npm run build` ✓, `cargo fmt --check` ✓.
+- [ ] **GUI smoke (human):** select a rect → Delete (cells → gaps, repaint) → Ctrl+Z
+      (restored) → Ctrl+Y (re-applied); confirm scroll + selection survive each edit;
+      load a new file → undo stack is cleared.
+
+### B2 design notes / known consequences
+- **Delete = clear-to-gap (mask), Cut = remove + close up (shorten).** Delete is a
+  *new user-facing key* (advisor #4) — spreadsheet-consistent with cut=shorten, but
+  surfaced for veto.
+- **Full-buffer transport** is fine at the design target; only sluggish at the
+  10k×10k ceiling. Add a changed-rows patch later *only* if a profile shows
+  width-preserving edits on big alignments are slow.
+- **Undo memory:** the inverse stores the old bytes, so select-all-delete parks the
+  whole old block per edit (ceiling consequence, not a target concern).
+- **Focus:** `Ctrl+Z`/`Delete` (like `Ctrl+C`) only fire when the GRID is focused —
+  after clicking a toolbar button, click back into the grid first.
 
 ## Batch C — Paste
 
@@ -39,9 +67,10 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
 
 - [ ] **D1** Cut → mask-to-gaps.
 - [ ] **D2** Cut → shorten (`DeleteBlock`).
-- [ ] **D3** Cut toggle button.
+- [ ] **D3** Cut toggle button. **Default = shorten** (user-decided 2026-06-23);
+      mask-to-gaps is the toggle.
 
-## Open question
+## Resolved
 
-- [ ] **Cut default** — mask-to-gaps (recommended, safe/shape-preserving) vs shorten
-      (symmetric with the local paste default). One-line flip; decide before D1.
+- [x] **Cut default = shorten** (user, 2026-06-23). Symmetric with the local paste
+      default; mask-to-gaps becomes the toggle alternative.

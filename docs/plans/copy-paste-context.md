@@ -40,7 +40,30 @@ Companion to `copy-paste-plan.md` / `copy-paste-tasks.md`.
 - **Pure model + tested** — `selection.ts` `normalize`/`rectDims` give the
   copy/edit target rect; `copy.ts` is pure like `viewport.ts`/`selection.ts`.
 
-## Seams for Batches B–D (paste/cut, the edit foundation)
+## Batch B (edit foundation) — files
+
+**New**
+- `src/ipc/edit.ts` — `clearCells(rect)` / `undoEdit()` / `redoEdit()` over the
+  three edit commands; each returns the post-edit render buffer (`Uint8Array`),
+  empty ⇒ no-op. The editing seam (UI calls these, never `invoke` directly).
+- `src/model/view.test.ts` — covers `AlignmentView.replaceContents`.
+
+**Edited**
+- `crates/align-core/src/edit.rs` — `CellWrite`, `EditError`, `apply` (atomic,
+  `Result`), `SetCells` impl, `apply_to_dataset` (resync), `EditStack` (undo/redo
+  over `Dataset`) + 12 tests. `lib.rs` re-exports the new types.
+- `crates/align-core/src/model.rs` — *(unchanged)*; `Sequence.residues` is the
+  derived cache `resync_residues` refreshes.
+- `src-tauri/src/state.rs` — `AppState{dataset, history: EditStack}`.
+- `src-tauri/src/commands.rs` — `clear_cells`/`undo_edit`/`redo_edit` (+ helpers
+  `gap_fill_writes`, `edit_bytes`); `store()` resets history on load; +2 tests.
+- `src-tauri/src/lib.rs` — registers the three edit commands. No new capability
+  (custom app commands aren't gated by capabilities, unlike plugin perms).
+- `src/model/view.ts` — `replaceContents(bytes)` (in-place, length-guarded).
+- `src/ui/Grid.tsx` — `editingRef` in-flight guard; `runEdit(op)` (IPC → in-place
+  patch → `markDirty`); Delete/Backspace + Ctrl/⌘+Z/Y/Shift+Z in `onKeyDown`.
+
+## Seams for Batches C–D (paste/cut, building on the B foundation)
 
 - `crates/align-core/src/edit.rs` — `EditCmd` enum (variants: InsertGap, DeleteGap,
   SlideResidues, ReorderRows, RenameSeq, SetRowHidden, DeleteSeq), `RowSel`

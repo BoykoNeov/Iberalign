@@ -10,7 +10,8 @@
 //! - M1 — `model`, `parse`, `coords`, `composition`: implemented.
 //! - M3 — `align`: stubbed (`todo!()`).
 //! - M4 — `analyze` (consensus/conservation/identity): stubbed.
-//! - M5 — `edit`, write half of `io`: stubbed.
+//! - M5 — `edit`: `SetCells` + `EditStack` undo/redo implemented (Batch B);
+//!   block/gap/row commands and the write half of `io` still stubbed.
 
 pub mod align;
 pub mod analyze;
@@ -22,5 +23,6 @@ pub mod model;
 pub mod parse;
 
 pub use composition::Composition;
+pub use edit::{apply_to_dataset, CellWrite, EditCmd, EditError, EditOutcome, EditStack};
 pub use model::{AlignedRow, Alignment, Alphabet, Dataset, RawRecord, SeqId, Sequence};
 pub use parse::{parse_fasta, summarize, ParseError, ParseOutcome, Summary};

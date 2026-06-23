@@ -3,7 +3,7 @@
 //! serializable DTOs so the engine types stay UI-agnostic.
 
 use crate::state::AppState;
-use align_core::{Alphabet, Dataset};
+use align_core::{Alphabet, CellWrite, Dataset, EditCmd};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
@@ -42,13 +42,15 @@ fn parse_to_dto(bytes: &[u8]) -> Result<(SummaryDto, Dataset), String> {
     Ok((dto, dataset))
 }
 
-/// Stash a freshly built dataset as the current session state.
+/// Stash a freshly built dataset as the current session state, resetting the
+/// edit history (its row indexes referred to the previous alignment).
 fn store(state: &State<'_, Mutex<AppState>>, dataset: Dataset) -> Result<(), String> {
     // Lock is held only to swap in the new dataset; no await while held.
-    state
+    let mut guard = state
         .lock()
-        .map_err(|_| "state lock poisoned".to_string())?
-        .dataset = Some(dataset);
+        .map_err(|_| "state lock poisoned".to_string())?;
+    guard.dataset = Some(dataset);
+    guard.history.clear();
     Ok(())
 }
 
@@ -167,6 +169,105 @@ pub async fn get_render_buffer(
     Ok(tauri::ipc::Response::new(flatten_buffer(ds)))
 }
 
+// ---- editing ---------------------------------------------------------------
+//
+// Mutations go through `align_core::EditStack` (reversible; Rust owns the truth),
+// and each command returns the POST-EDIT render buffer as raw bytes — the same
+// transport as `get_render_buffer`. The current edits preserve the alignment
+// width, so the frontend copies the bytes into its existing render buffer in
+// place (no realloc, no new view ⇒ scroll + selection are preserved). An empty
+// response means the edit was a no-op (e.g. undo at the bottom of the stack), and
+// the frontend skips the repaint. Width-changing commands (paste insert / cut
+// shorten) extend this transport later: they return the full new buffer too, but
+// the frontend rebuilds the view because the length changes.
+
+/// Per-row gap-fill writes covering the rectangle rows `r0..=r1`, cols `c0..=c1`.
+/// The engine command behind delete/clear-to-gap (mask).
+fn gap_fill_writes(r0: usize, r1: usize, c0: usize, c1: usize) -> Vec<CellWrite> {
+    let count = c1.saturating_sub(c0) + 1;
+    (r0..=r1)
+        .map(|row| CellWrite {
+            row,
+            col: c0,
+            bytes: vec![b'-'; count],
+        })
+        .collect()
+}
+
+/// The post-edit render bytes: the full flattened buffer, or empty when nothing
+/// changed (the frontend then skips the in-place copy + repaint).
+fn edit_bytes(ds: &Dataset, changed: &[usize]) -> Vec<u8> {
+    if changed.is_empty() {
+        Vec::new()
+    } else {
+        flatten_buffer(ds)
+    }
+}
+
+/// Clear (mask to gaps) the selected rectangle and return the post-edit render
+/// buffer. The first concrete reversible edit and the foundation paste/cut build
+/// on. The rect is in alignment coordinates (the frontend normalizes the
+/// selection first). Errors if nothing is loaded or the rect is out of bounds
+/// (the edit is atomic — state is untouched on error).
+#[tauri::command]
+pub async fn clear_cells(
+    r0: usize,
+    c0: usize,
+    r1: usize,
+    c1: usize,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<tauri::ipc::Response, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    // Split-borrow the two fields so the history can mutate the dataset.
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let writes = gap_fill_writes(r0, r1, c0, c1);
+    let changed = history
+        .apply(ds, EditCmd::SetCells { writes })
+        .map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(edit_bytes(ds, &changed)))
+}
+
+/// Undo the most recent edit; returns the post-edit render buffer (empty when
+/// there is nothing to undo). Errors if nothing is loaded.
+#[tauri::command]
+pub async fn undo_edit(state: State<'_, Mutex<AppState>>) -> Result<tauri::ipc::Response, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let changed = history.undo(ds).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(edit_bytes(
+        ds,
+        changed.as_deref().unwrap_or(&[]),
+    )))
+}
+
+/// Redo the most recently undone edit; returns the post-edit render buffer
+/// (empty when there is nothing to redo). Errors if nothing is loaded.
+#[tauri::command]
+pub async fn redo_edit(state: State<'_, Mutex<AppState>>) -> Result<tauri::ipc::Response, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let changed = history.redo(ds).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(edit_bytes(
+        ds,
+        changed.as_deref().unwrap_or(&[]),
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +305,32 @@ mod tests {
     fn empty_dataset_alphabet_defaults_to_dna() {
         let ds = Dataset::from_records(&[]);
         assert_eq!(dataset_alphabet(&ds).label(), "DNA");
+    }
+
+    #[test]
+    fn clear_cells_masks_rect_and_undo_restores_buffer() {
+        // The edit path the `clear_cells`/`undo_edit` commands run, minus the
+        // Tauri State plumbing: build gap-fill writes, apply through the history,
+        // and confirm the flattened render buffer reflects the edit and its undo.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+
+        // Mask rows 0..=1, cols 1..=2.
+        let writes = gap_fill_writes(0, 1, 1, 2);
+        let changed = history
+            .apply(&mut ds, align_core::EditCmd::SetCells { writes })
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(flatten_buffer(&ds), b"A--TT--T");
+
+        history.undo(&mut ds).unwrap();
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn edit_bytes_is_empty_on_noop() {
+        let ds = Dataset::from_records(&[rec("a", "ACGT")]);
+        assert!(edit_bytes(&ds, &[]).is_empty());
+        assert_eq!(edit_bytes(&ds, &[0]), b"ACGT");
     }
 }

@@ -100,6 +100,19 @@ export class Canvas2DRenderer implements Renderer {
     this.occView = null;
   }
 
+  /**
+   * Drop content-derived caches after an in-place edit. The cell tiers read
+   * `view.buffer` fresh each draw, but the density tier's per-column occupancy is
+   * memoized by view IDENTITY (`ensureOccupancy`) — an edit mutates the buffer in
+   * place without changing the view object, so without this the zoomed-out tier
+   * would render stale occupancy until the next load. Call after a buffer patch,
+   * before marking the store dirty. (The glyph atlas is content-independent.)
+   */
+  invalidateContentCaches(): void {
+    this.occ = null;
+    this.occView = null;
+  }
+
   // ---- tiers -------------------------------------------------------------
 
   /**

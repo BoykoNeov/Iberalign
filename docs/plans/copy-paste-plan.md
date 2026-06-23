@@ -51,9 +51,9 @@ alignment. It invalidates the consensus/conservation caches, which rebuild.
 - **Paste default mode:** **insert** (not overwrite).
 - **Paste insert sub-toggle:** **shift only the pasted rows** is the DEFAULT;
   **shift every other sequence (insert gaps to keep the alignment)** is the toggle.
-- **Cut toggle:** **mask-to-gaps** vs **shorten**. *Default still open* — recommend
-  mask (shape-preserving, the selection plan's "safe default"); a one-line flip to
-  shorten if the user prefers symmetry with the local paste default.
+- **Cut toggle:** **mask-to-gaps** vs **shorten**. **Default = shorten**
+  (user-decided 2026-06-23), symmetric with the local paste default; mask-to-gaps
+  is the toggle alternative.
 - **Alphabet validation on paste:** **warn** (do not reject).
 - **Paste format:** auto-detect — clipboard text starting with `>` is parsed as
   FASTA (headers stripped); otherwise raw lines. No third toggle.
@@ -67,12 +67,18 @@ write-text` capability; `model/copy.ts` pure builder (Raw/FASTA, keep gaps,
 selection-change listener (coarse React mirror); `ui/Toolbar.tsx` (Sel readout +
 Copy button + Raw|FASTA toggle + ephemeral message); `Ctrl/⌘+C` in `Grid`.
 
-**Batch B — Edit foundation** *(prerequisite for every mutation)*
-- **B1** Rust: implement `apply → EditOutcome{inverse, changed_rows}` + the
-  undo/redo stack in `AppState`, landed with one trivial concrete command
-  (`SetCells`/overwrite) + tests.
-- **B2** IPC `apply_edit`/`undo`/`redo` + changed-rows render-buffer patch +
-  `Ctrl+Z`/`Ctrl+Y` in the UI. Editing round-trips end to end.
+**Batch B — Edit foundation (DONE, green; GUI smoke pending)** *(prerequisite for
+every mutation)*
+- **B1** `apply → Result<EditOutcome, EditError>` (atomic) + `SetCells` + the
+  `EditStack` undo/redo history over a **`Dataset`** (`apply_to_dataset` resyncs the
+  derived ungapped residues so undo is lossless on derived state). `AppState{dataset,
+  history}`; history reset on load. 12 tests.
+- **B2** IPC `clear_cells`/`undo_edit`/`redo_edit` returning the **full post-edit
+  render buffer** (advisor: the changed-rows patch was a B2-only orphan — C/D change
+  width and rebuild anyway; the full buffer is the transport they extend, and copying
+  it in place preserves scroll + selection). `Ctrl+Z`/`Shift+Z`/`Ctrl+Y` + **Delete =
+  clear-to-gap** (first reversible edit; doubles as cut-mask). Editing round-trips end
+  to end (pending GUI smoke).
 
 **Batch C — Paste**
 - **C1** Paste **overwrite** (clipboard read → parse → `SetCells`). Smallest real paste.

@@ -54,4 +54,22 @@ export class AlignmentView {
   nameAt(row: number): string {
     return this.meta.names[row] ?? "";
   }
+
+  /**
+   * Overwrite the buffer contents in place from a full-size post-edit buffer
+   * (same `width × numRows`). Mutates the existing `Uint8Array`, so the
+   * renderer's view ref and any live row subarrays stay valid and no new view is
+   * allocated (preserving scroll + selection); the caller marks the store dirty
+   * to repaint. Throws on a length mismatch — a width-changing edit must rebuild
+   * the view instead of patching it.
+   */
+  replaceContents(bytes: Uint8Array): void {
+    if (bytes.length !== this.buffer.length) {
+      throw new Error(
+        `edit buffer length ${bytes.length} != current ${this.buffer.length} ` +
+          `(${this.width}×${this.numRows}); width-changing edits must rebuild the view`,
+      );
+    }
+    this.buffer.set(bytes);
+  }
 }

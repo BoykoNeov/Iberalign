@@ -41,6 +41,7 @@ import Toolbar from "./Toolbar";
 import { normalize, rectDims } from "../state/selection";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
 import { copyText } from "../ipc/clipboard";
+import { clearCells, undoEdit, redoEdit } from "../ipc/edit";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -129,6 +130,11 @@ export default function Grid({ view }: GridProps) {
   const [copyMsg, setCopyMsg] = useState<string | null>(null);
   const msgTimerRef = useRef<number | null>(null);
   const doCopyRef = useRef<() => void>(() => {});
+
+  // Guards against overlapping edits: a held Ctrl+Z would otherwise fire
+  // concurrent undo() invokes whose completion order Tauri doesn't guarantee.
+  // While an edit's IPC round-trip is in flight, further edit keys are ignored.
+  const editingRef = useRef(false);
 
   // Flash an ephemeral message in the toolbar, auto-clearing after a moment.
   const showMsg = useCallback((msg: string) => {
@@ -401,6 +407,33 @@ export default function Grid({ view }: GridProps) {
     canvas.addEventListener("pointercancel", endPointer);
     canvas.addEventListener("pointerleave", onPointerLeave);
 
+    // Run a reversible edit: invoke the IPC op (which returns the post-edit render
+    // buffer), copy it into the view's buffer in place, and repaint. Serialized via
+    // `editingRef` so a held key can't fire overlapping, out-of-order invokes. An
+    // empty buffer means a no-op (e.g. undo at the bottom of the stack) — skip the
+    // patch. The in-place copy keeps the same `AlignmentView` (App's `view` prop is
+    // untouched), so scroll + selection survive the edit.
+    const runEdit = async (op: () => Promise<Uint8Array>) => {
+      const v = viewRef.current;
+      if (!v || editingRef.current) return;
+      editingRef.current = true;
+      try {
+        const bytes = await op();
+        if (bytes.length > 0) {
+          v.replaceContents(bytes);
+          // The cell tiers re-read the buffer each draw, but the density tier's
+          // occupancy is memoized by view identity — drop it so a zoom-out after an
+          // edit doesn't show stale bars (the view object is reused in place).
+          renderer.invalidateContentCaches();
+          store.markDirty();
+        }
+      } catch (err) {
+        showMsg(`Edit failed: ${String(err)}`);
+      } finally {
+        editingRef.current = false;
+      }
+    };
+
     // Keyboard cursor movement (cell is focusable). Arrows move the cursor (the
     // M2 arrow-PAN is gone — see selection-plan.md); Shift+arrows extend the
     // rectangle; Page moves a page of rows; Home/End jump to the row's left/right
@@ -417,6 +450,28 @@ export default function Grid({ view }: GridProps) {
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
         e.preventDefault();
         void doCopyRef.current();
+        return;
+      }
+      // Delete / Backspace — clear (mask to gaps) the selected rectangle. The
+      // first reversible edit (Delete = clear-to-gap; Cut = remove + close up
+      // lands later). No selection ⇒ nothing to delete.
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const sel = store.getSelection();
+        if (sel) {
+          e.preventDefault();
+          void runEdit(() => clearCells(normalize(sel)));
+        }
+        return;
+      }
+      // Undo / Redo. Ctrl/⌘+Z undoes; Ctrl/⌘+Shift+Z or Ctrl/⌘+Y redoes.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        void runEdit(e.shiftKey ? redoEdit : undoEdit);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        void runEdit(redoEdit);
         return;
       }
       const corner = e.ctrlKey || e.metaKey;

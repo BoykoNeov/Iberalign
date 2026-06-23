@@ -17,7 +17,10 @@ pub fn run() {
             commands::parse_summary,
             commands::load_alignment,
             commands::get_alignment_meta,
-            commands::get_render_buffer
+            commands::get_render_buffer,
+            commands::clear_cells,
+            commands::undo_edit,
+            commands::redo_edit
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
