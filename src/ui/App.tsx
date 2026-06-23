@@ -35,6 +35,16 @@ export default function App() {
   // `buffer.length === width*numRows`, so a transport mismatch throws loud here
   // (caught by the callers) rather than mis-rendering.
   async function showAlignment(loaded: Summary) {
+    // Release the previous view BEFORE allocating the next render buffer. At the
+    // 10k×10k stress ceiling each buffer is ~100MB of *contiguous* memory; holding
+    // the old view's buffer live while `getRenderBuffer` allocates the new one (plus
+    // the IPC transport copy) made the WebView2/Chromium renderer fail a contiguous
+    // allocation → "Out of Memory" (notably opening a 2nd large file right after an
+    // edit). Nulling first lets A's buffer be reclaimed before B's is allocated.
+    // Consequence: if the fetch below throws we drop to the open screen rather than
+    // keeping A on screen — acceptable, since Rust has already swapped to B by now.
+    setView(null);
+    setSummary(null);
     const [meta, buffer] = await Promise.all([getAlignmentMeta(), getRenderBuffer()]);
     setView(new AlignmentView(buffer, meta));
     setSummary(loaded);

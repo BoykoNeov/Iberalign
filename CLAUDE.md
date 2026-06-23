@@ -144,8 +144,8 @@ dependency-light and surface toolchain/linker issues fast.
   toggle keeps the alignment; **cut default = shorten**, mask is the toggle; alphabet
   warn) and the model-fit proof (all modes legal via equal-width + trailing-pad) live
   in `docs/plans/copy-paste-{plan,context,tasks}.md`.
-- **Edit foundation (Batch B) — code complete + green; GUI smoke pending.** The
-  reversible-edit machinery paste/cut/delete all build on. `align-core::edit`:
+- **Edit foundation (Batch B) — code complete + green; GUI smoke PASSED
+  (2026-06-23).** The reversible-edit machinery paste/cut/delete all build on. `align-core::edit`:
   `apply → Result<EditOutcome{inverse, changed_rows}, EditError>` is now real
   (**atomic** — validates every write before mutating) with the first concrete
   command `SetCells` (in-place overwrite; the inverse replays in reverse so
@@ -164,7 +164,18 @@ dependency-light and surface toolchain/linker issues fast.
   an `editingRef` in-flight guard (held-key safety). No new capability (custom app
   commands aren't capability-gated). NB **Delete-to-gap is a new user-facing key**;
   full-buffer-per-edit is fine at the design target, heavy only at the 10k×10k
-  ceiling.
+  ceiling. **GUI smoke (2026-06-23) PASSED** after three fixes landed during it:
+  (1) **open-after-edit "Out of Memory"** at the ceiling — the WebView2 renderer
+  (not Rust: clean terminal; a throwaway headless repro proved the engine survives
+  the worst case) failed a ~100MB *contiguous* allocation because `App.tsx::
+  showAlignment` held the old view's buffer live while allocating the next; fix =
+  **null `view`/`summary` before the fetch** so the old buffer is reclaimed first
+  (user re-test: Ctrl+A→Delete alone survives the ~200MB edit transient, crash
+  gone ⇒ open-path churn, not the per-edit transport ⇒ no transport shrink); (2)
+  **edit/nav keys now fire without grid focus** — `Grid` binds `onKeyDown` on
+  `window` with an editable-target guard (input/textarea/select/contenteditable →
+  bail); (3) **gaps render `-`** (`Canvas2DRenderer` `GAP_GLYPH`) instead of a
+  blank fill.
 - **Residue palette — vivid default + always-black glyph ink (this batch).**
   `render/colors.ts`: `VIVID_SCHEME` is the default (A green `#22C32A`, C azure
   `#2E90FF`, G yellow `#FFD21A`, T/U red `#FF2A2A`); `CLASSIC_SCHEME` (conventional)

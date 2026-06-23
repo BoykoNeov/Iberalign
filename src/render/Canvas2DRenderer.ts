@@ -31,6 +31,11 @@ import type { Renderer } from "./Renderer";
 // One cell of overscan so a partly-scrolled edge cell is fully drawn.
 const OVERSCAN = 1;
 
+// The glyph drawn for a gap cell at the letter tier: a unified `-` (the engine
+// already normalizes `.`→`-` in memory, but any gap byte renders as `-` so a gap
+// reads as a gap — and a deleted/masked cell is visibly a gap, not a blank).
+const GAP_GLYPH = 0x2d; // '-'
+
 export class Canvas2DRenderer implements Renderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -155,14 +160,16 @@ export class Canvas2DRenderer implements Renderer {
         ctx.fillRect(x0, yTop, w, h);
       });
 
-      // Glyphs (letter tier only): one atlas blit per non-gap cell.
+      // Glyphs (letter tier only): one atlas blit per cell — residues as
+      // themselves, gaps as a unified `-` so a gap reads as a gap (and a masked/
+      // deleted cell shows the dash rather than a blank fill).
       if (atlas) {
         for (let i = 0; i < nCols; i++) {
           const xL = xs[i];
           const w = xs[i + 1] - xL;
           if (w <= 0) continue;
           const byte = buf[base + cols.first + i];
-          if (!isGap(byte)) atlas.blit(ctx, byte, xL, yTop, w, h);
+          atlas.blit(ctx, isGap(byte) ? GAP_GLYPH : byte, xL, yTop, w, h);
         }
       }
     }

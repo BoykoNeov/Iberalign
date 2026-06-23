@@ -67,8 +67,13 @@ write-text` capability; `model/copy.ts` pure builder (Raw/FASTA, keep gaps,
 selection-change listener (coarse React mirror); `ui/Toolbar.tsx` (Sel readout +
 Copy button + Raw|FASTA toggle + ephemeral message); `Ctrl/⌘+C` in `Grid`.
 
-**Batch B — Edit foundation (DONE, green; GUI smoke pending)** *(prerequisite for
-every mutation)*
+**Batch B — Edit foundation (DONE, green; GUI smoke PASSED 2026-06-23)** *(prerequisite
+for every mutation)* — smoke surfaced + fixed three issues: an open-after-edit
+WebView2 "Out of Memory" at the 10k×10k ceiling (the old ~100MB buffer was held live
+while the next was allocated → `App.tsx::showAlignment` now nulls the view before
+fetching), edit/nav keys not firing unless the grid held focus (window-level keydown +
+editable-target guard), and gaps rendering blank (now a `-` glyph). See `copy-paste-
+tasks.md` "B2 smoke fixes".
 - **B1** `apply → Result<EditOutcome, EditError>` (atomic) + `SetCells` + the
   `EditStack` undo/redo history over a **`Dataset`** (`apply_to_dataset` resyncs the
   derived ungapped residues so undo is lossless on derived state). `AppState{dataset,

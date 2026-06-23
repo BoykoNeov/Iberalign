@@ -63,6 +63,16 @@ Companion to `copy-paste-plan.md` / `copy-paste-tasks.md`.
 - `src/ui/Grid.tsx` — `editingRef` in-flight guard; `runEdit(op)` (IPC → in-place
   patch → `markDirty`); Delete/Backspace + Ctrl/⌘+Z/Y/Shift+Z in `onKeyDown`.
 
+**Edited (B2 GUI-smoke fixes, 2026-06-23)**
+- `src/ui/App.tsx` — `showAlignment` nulls `view`/`summary` BEFORE fetching the next
+  meta + render buffer, so the old ~100MB buffer is reclaimable before the new one is
+  allocated → fixes the open-after-edit "Out of Memory" renderer crash at the ceiling.
+- `src/ui/Grid.tsx` — `onKeyDown` now bound on `window` (was the grid cell) with an
+  editable-target guard (`input`/`textarea`/`select`/`contenteditable` → bail), so the
+  edit/nav keys fire regardless of which control was last clicked.
+- `src/render/Canvas2DRenderer.ts` — `GAP_GLYPH` (`-`); the letter-tier blit draws it
+  for any gap byte (was: skip gaps) so gaps/deleted cells show a dash, not a blank.
+
 ## Seams for Batches C–D (paste/cut, building on the B foundation)
 
 - `crates/align-core/src/edit.rs` — `EditCmd` enum (variants: InsertGap, DeleteGap,

@@ -445,6 +445,21 @@ export default function Grid({ view }: GridProps) {
     const onKeyDown = (e: KeyboardEvent) => {
       const v = viewRef.current;
       if (!v) return;
+      // Bound on `window` (not the grid cell) so Delete / Ctrl+Z / Ctrl+C / nav
+      // fire even when focus sits on a toolbar/header button after a click — the
+      // grid is the app's primary surface while a file is loaded. Bail when an
+      // editable field is focused so we never hijack real typing (none exist with
+      // the grid up today, but this keeps the window binding future-safe).
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.isContentEditable ||
+          t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT")
+      ) {
+        return;
+      }
       // Copy (Ctrl/⌘+C) — handled here so a grid-focused copy serializes the
       // selected block (our copier), not the browser's empty text selection.
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
@@ -535,7 +550,10 @@ export default function Grid({ view }: GridProps) {
       }
       e.preventDefault();
     };
-    cell.addEventListener("keydown", onKeyDown);
+    // Window-level so the edit/nav keys work without the grid cell holding focus
+    // (the user can Delete right after clicking a toolbar button). The cell stays
+    // tabIndex=0 + focused-on-click for a11y; the guard above protects inputs.
+    window.addEventListener("keydown", onKeyDown);
 
     // Scrollbar thumb drag. The thumbs float over the canvas edges; dragging one
     // recomputes the SAME `layoutScrollbars` against the live viewport (shared
@@ -614,7 +632,7 @@ export default function Grid({ view }: GridProps) {
       canvas.removeEventListener("pointerup", endPointer);
       canvas.removeEventListener("pointercancel", endPointer);
       canvas.removeEventListener("pointerleave", onPointerLeave);
-      cell.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown);
       vThumb.removeEventListener("pointerdown", onVThumbDown);
       vThumb.removeEventListener("pointermove", onVThumbMove);
       vThumb.removeEventListener("pointerup", endVThumb);
