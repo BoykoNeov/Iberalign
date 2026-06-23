@@ -127,6 +127,25 @@ dependency-light and surface toolchain/linker issues fast.
   scrollbars still pan; `mousedown` `preventDefault` on button 1 kills WebView2
   middle-click autoscroll. Phase 2 (copy) and delete/edit are separate, not done.
   Full design + status in `docs/plans/selection-{plan,context,tasks}.md`.
+- **Copy (clipboard, Batch A) — code complete + green; GUI smoke pending.** The
+  read-only half of copy/paste/cut: copy the selected rectangle to the system
+  clipboard as **Raw** (residues, one seq per line) or **FASTA** (`>name` +
+  residues), **gaps kept (WYSIWYG)** so copy→paste round-trips. Tauri
+  `clipboard-manager` plugin + a scoped `clipboard-manager:allow-write-text`
+  capability (write only; compile-time validated). Copy runs frontend-side (the JS
+  already holds the buffer + names — no mutation, Rust still owns truth); only the
+  clipboard *write* crosses the seam (`ipc/clipboard.ts`). Pure `model/copy.ts`
+  (`buildCopyText` + `COPY_CELL_CAP` 10M-cell guard, tested); `GridStore`
+  selection-change listener (the coarse React mirror the selection foundation
+  reserved) drives a new top **`ui/Toolbar`** (Sel readout + Copy button + Raw|FASTA
+  toggle + ephemeral message); `Ctrl/⌘+C` triggers the same path. **Paste + cut are
+  the M5 EDIT FOUNDATION** (reversible `EditCmd` + undo stack + changed-rows buffer
+  patch — `edit.rs::apply` is still `todo!()`), split into Batches B (foundation),
+  C (paste), D (cut). User-decided semantics (paste default = insert / shift-only-
+  pasted-rows; shift-all toggle keeps the alignment; cut mask-vs-shorten toggle;
+  alphabet warn) and the model-fit proof (all modes legal via equal-width +
+  trailing-pad) live in `docs/plans/copy-paste-{plan,context,tasks}.md`. Open: cut
+  default (mask vs shorten).
 - **Residue palette — vivid default + always-black glyph ink (this batch).**
   `render/colors.ts`: `VIVID_SCHEME` is the default (A green `#22C32A`, C azure
   `#2E90FF`, G yellow `#FFD21A`, T/U red `#FF2A2A`); `CLASSIC_SCHEME` (conventional)

@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Baseline capability for the main window. Scoped narrowly; permissions are added per-milestone as features land (spec §9). `dialog:allow-open` (M1) lets the webview invoke the native open-file dialog; the file itself is read by the Rust `load_alignment` command, so no `fs` permission is needed.",
+  "description": "Baseline capability for the main window. Scoped narrowly; permissions are added per-milestone as features land (spec §9). `dialog:allow-open` (M1) lets the webview invoke the native open-file dialog; the file itself is read by the Rust `load_alignment` command, so no `fs` permission is needed. `clipboard-manager:allow-write-text` (selection copy, Phase 2) lets the webview write the copied block to the system clipboard — write only; no clipboard read is granted.",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "clipboard-manager:allow-write-text"
   ]
 }

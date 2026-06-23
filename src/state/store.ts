@@ -44,6 +44,11 @@ export class GridStore {
   // The cursor + rectangular selection (store-only — no React mirror; the rAF
   // loop's SelectionLayer reads it each dirty frame). `null` ⇒ nothing selected.
   private selection: Selection | null;
+  // Optional coarse listener fired on every selection change (set/extend/move/
+  // clear/load). The grid uses it to mirror the selection into React for the
+  // status readout ONLY — throttled there to rect identity, never per frame. The
+  // rAF loop still reads `getSelection()` directly; this does not drive drawing.
+  private onSelectionChange?: (sel: Selection | null) => void;
 
   constructor() {
     this.viewport = initViewport();
@@ -80,12 +85,19 @@ export class GridStore {
     return this.selection;
   }
 
+  /** Register the coarse selection-change listener (the React status readout).
+   *  Replaces any previous listener; pass `undefined` to detach. */
+  setSelectionListener(cb: ((sel: Selection | null) => void) | undefined): void {
+    this.onSelectionChange = cb;
+  }
+
   /** Set the loaded alignment's dimensions (call on load), reset the scroll to
    *  the origin, clear any selection (it pointed at the old alignment's rows),
    *  and re-clamp. Marks dirty so the new alignment paints. */
   setDims(cols: number, rows: number): void {
     this.dims = { cols, rows };
     this.selection = null;
+    this.onSelectionChange?.(null);
     this.mutate(clamp({ ...this.viewport, scrollX: 0, scrollY: 0 }, this.dims));
   }
 
@@ -161,14 +173,17 @@ export class GridStore {
     if (this.selection === null) return;
     this.selection = null;
     this.dirty = true;
+    this.onSelectionChange?.(null);
   }
 
   /** The single selection write path: swap in the next selection (and optionally
-   *  a scrolled viewport, for cursor moves) and always mark dirty. */
+   *  a scrolled viewport, for cursor moves), always mark dirty, and notify the
+   *  coarse listener. */
   private setSelection(next: Selection, viewport?: Viewport): void {
     this.selection = next;
     if (viewport) this.viewport = viewport;
     this.dirty = true;
+    this.onSelectionChange?.(next);
   }
 
   /** The single viewport write path: swap in the next viewport and always mark

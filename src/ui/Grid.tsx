@@ -37,6 +37,10 @@ import { DEFAULT_CELL } from "../state/viewport";
 import { NAME_W, RULER_H } from "../render/chrome";
 import { computeHover, cellAtPixel, type HoverInfo } from "./hover";
 import StatusBar from "./StatusBar";
+import Toolbar from "./Toolbar";
+import { normalize, rectDims } from "../state/selection";
+import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
+import { copyText } from "../ipc/clipboard";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -109,6 +113,67 @@ export default function Grid({ view }: GridProps) {
   const [zoom, setZoom] = useState(DEFAULT_CELL);
   const lastZoomRef = useRef<string | null>(null);
 
+  // Copy controls (Batch A — selection → clipboard). `selInfo` is the selected
+  // block's size, mirrored coarsely from the store for the toolbar readout and the
+  // Copy button's enabled state; `copyFormat` is the Raw|FASTA toggle; `copyMsg` is
+  // an ephemeral toolbar message. The refs back the once-bound keydown handler:
+  // `copyFormatRef` shadows the format so the handler reads the live value without
+  // re-binding; `lastSelRef` throttles the readout re-render to the selection's
+  // SIZE identity (a cursor moving within the same dims costs no render);
+  // `doCopyRef` is the latest-callback bridge the keydown calls; `msgTimerRef`
+  // clears the transient message.
+  const [selInfo, setSelInfo] = useState<{ rows: number; cols: number } | null>(null);
+  const lastSelRef = useRef<string | null>(null);
+  const [copyFormat, setCopyFormat] = useState<CopyFormat>("raw");
+  const copyFormatRef = useRef<CopyFormat>("raw");
+  const [copyMsg, setCopyMsg] = useState<string | null>(null);
+  const msgTimerRef = useRef<number | null>(null);
+  const doCopyRef = useRef<() => void>(() => {});
+
+  // Flash an ephemeral message in the toolbar, auto-clearing after a moment.
+  const showMsg = useCallback((msg: string) => {
+    setCopyMsg(msg);
+    if (msgTimerRef.current !== null) window.clearTimeout(msgTimerRef.current);
+    msgTimerRef.current = window.setTimeout(() => {
+      setCopyMsg(null);
+      msgTimerRef.current = null;
+    }, 2500);
+  }, []);
+
+  // Copy the selected block to the clipboard in the current format. Stable (reads
+  // store/view/format via refs), so the keydown handler bound once below can call
+  // it through `doCopyRef`. Guards the select-all-on-the-stress-fixture case
+  // (COPY_CELL_CAP) rather than freezing on a ~100M-char build.
+  const doCopy = useCallback(async () => {
+    const store = storeRef.current;
+    const view = viewRef.current;
+    if (!store || !view) return;
+    const sel = store.getSelection();
+    if (!sel) {
+      showMsg("Select cells first, then copy");
+      return;
+    }
+    const rect = normalize(sel);
+    const { rows, cols } = rectDims(rect);
+    if (rows * cols > COPY_CELL_CAP) {
+      showMsg(`Selection too large to copy (${rows * cols} cells; limit ${COPY_CELL_CAP})`);
+      return;
+    }
+    try {
+      await copyText(buildCopyText(view, rect, copyFormatRef.current));
+      showMsg(`Copied ${cols} × ${rows} (${copyFormatRef.current === "fasta" ? "FASTA" : "raw"})`);
+    } catch (e) {
+      showMsg(`Copy failed: ${String(e)}`);
+    }
+  }, [showMsg]);
+  doCopyRef.current = doCopy;
+
+  // Toggle the copy format from the toolbar; mirror into the ref the keydown reads.
+  const handleSetFormat = useCallback((format: CopyFormat) => {
+    copyFormatRef.current = format;
+    setCopyFormat(format);
+  }, []);
+
   // Mount once: build store/renderer/loop, attach input, start drawing. Has no
   // `view` dependency — the view-change effect below feeds dims; this keeps a new
   // load from tearing down the canvas. Cleanup fully releases everything and
@@ -139,6 +204,24 @@ export default function Grid({ view }: GridProps) {
       () => viewRef.current,
     );
     storeRef.current = store;
+
+    // Mirror selection changes into React for the toolbar readout + Copy enabled
+    // state — coarse, throttled to the selection's SIZE identity, so a cursor
+    // moving within the same dims costs no render. The rAF loop still reads the
+    // store's selection directly for drawing; this only feeds the toolbar.
+    store.setSelectionListener((sel) => {
+      if (!sel) {
+        if (lastSelRef.current === null) return;
+        lastSelRef.current = null;
+        setSelInfo(null);
+        return;
+      }
+      const dims = rectDims(normalize(sel));
+      const key = `${dims.cols}x${dims.rows}`;
+      if (key === lastSelRef.current) return;
+      lastSelRef.current = key;
+      setSelInfo(dims);
+    });
 
     const dpr = () => globalThis.devicePixelRatio || 1;
 
@@ -329,6 +412,13 @@ export default function Grid({ view }: GridProps) {
     const onKeyDown = (e: KeyboardEvent) => {
       const v = viewRef.current;
       if (!v) return;
+      // Copy (Ctrl/⌘+C) — handled here so a grid-focused copy serializes the
+      // selected block (our copier), not the browser's empty text selection.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        void doCopyRef.current();
+        return;
+      }
       const corner = e.ctrlKey || e.metaKey;
       const shift = e.shiftKey;
       const FAR = Number.MAX_SAFE_INTEGER; // clamped to the content edge by the reducers
@@ -482,6 +572,11 @@ export default function Grid({ view }: GridProps) {
       ruler.dispose();
       names.dispose();
       selection.dispose();
+      store.setSelectionListener(undefined);
+      if (msgTimerRef.current !== null) {
+        window.clearTimeout(msgTimerRef.current);
+        msgTimerRef.current = null;
+      }
       storeRef.current = null;
     };
   }, []);
@@ -525,6 +620,13 @@ export default function Grid({ view }: GridProps) {
   // over the canvas.
   return (
     <div className="grid-shell">
+      <Toolbar
+        selInfo={selInfo}
+        copyFormat={copyFormat}
+        onSetFormat={handleSetFormat}
+        onCopy={doCopy}
+        message={copyMsg}
+      />
       <div className="grid-container" style={CHROME_VARS}>
         <div className="grid-corner" />
         <canvas ref={rulerRef} className="grid-ruler" />

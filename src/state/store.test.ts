@@ -163,3 +163,39 @@ describe("GridStore — selection", () => {
     expect(store.getSelection()).toBeNull();
   });
 });
+
+describe("GridStore — selection listener (React mirror)", () => {
+  let store: GridStore;
+  let seen: Array<{ active: { row: number; col: number } } | null>;
+  beforeEach(() => {
+    store = new GridStore();
+    store.setDims(100, 40);
+    store.setSelectionListener((sel) => seen.push(sel));
+    seen = [];
+  });
+
+  it("fires on set/extend/move/select-all with the new selection", () => {
+    store.setCursor(2, 3);
+    store.setActive(5, 9);
+    store.selectAll();
+    expect(seen).toHaveLength(3);
+    expect(seen[0]!.active).toEqual({ row: 2, col: 3 });
+    expect(seen[1]!.active).toEqual({ row: 5, col: 9 });
+    expect(seen[2]!.active).toEqual({ row: 39, col: 99 });
+  });
+
+  it("fires with null on clear and on load (setDims)", () => {
+    store.setCursor(1, 1);
+    store.clearSelection();
+    expect(seen[seen.length - 1]).toBeNull(); // clearSelection fired null
+    store.setCursor(2, 2);
+    store.setDims(10, 10); // load clears the selection
+    expect(seen[seen.length - 1]).toBeNull(); // setDims fired null
+  });
+
+  it("detaches when the listener is unset", () => {
+    store.setSelectionListener(undefined);
+    store.setCursor(4, 4);
+    expect(seen).toHaveLength(0);
+  });
+});
