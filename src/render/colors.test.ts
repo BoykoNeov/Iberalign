@@ -12,13 +12,28 @@ import {
   listSchemes,
   CLASSIC_SCHEME,
   COLORBLIND_SCHEME,
+  VIVID_SCHEME,
   DEFAULT_SCHEME_ID,
-  INK_DARK,
-  INK_LIGHT,
+  GLYPH_INK,
   type Rgb,
 } from "./colors";
 
 const ord = (ch: string) => ch.charCodeAt(0);
+
+describe("vivid scheme — the bright default mapping", () => {
+  const fill = (ch: string) => VIVID_SCHEME.fillStyleFor(ord(ch));
+
+  it("maps A green, T red, C blue, G yellow", () => {
+    expect(fill("A")).toBe("rgb(34, 195, 42)"); // green
+    expect(fill("T")).toBe("rgb(255, 42, 42)"); // red
+    expect(fill("C")).toBe("rgb(46, 144, 255)"); // light azure blue
+    expect(fill("G")).toBe("rgb(255, 210, 26)"); // yellow
+  });
+
+  it("colors U as T (RNA shares the pyrimidine)", () => {
+    expect(fill("U")).toBe(fill("T"));
+  });
+});
 
 describe("classic scheme — the conventional vivid mapping", () => {
   const fill = (ch: string) => CLASSIC_SCHEME.fillStyleFor(ord(ch));
@@ -51,15 +66,17 @@ describe("classic scheme — the conventional vivid mapping", () => {
   });
 });
 
-describe("glyph ink contrast", () => {
-  it("inks light fills dark and dark fills light", () => {
-    // classic C (cyan) is light → dark ink; A (green) is dark → light ink.
-    expect(CLASSIC_SCHEME.inkStyleFor(ord("C"))).toBe(INK_DARK);
-    expect(CLASSIC_SCHEME.inkStyleFor(ord("A"))).toBe(INK_LIGHT);
+describe("glyph ink — always black", () => {
+  it("inks every residue solid black, regardless of fill or scheme", () => {
+    for (const scheme of [VIVID_SCHEME, CLASSIC_SCHEME, COLORBLIND_SCHEME]) {
+      for (const ch of ["A", "C", "G", "T", "U", "N"]) {
+        expect(scheme.inkStyleFor(ord(ch))).toBe(GLYPH_INK);
+      }
+    }
   });
 
-  it("derives ink from the residue's own fill (lowercase matches uppercase)", () => {
-    expect(CLASSIC_SCHEME.inkStyleFor(ord("c"))).toBe(CLASSIC_SCHEME.inkStyleFor(ord("C")));
+  it("inks gaps black too (uniform ink table)", () => {
+    expect(VIVID_SCHEME.inkStyleFor(ord("-"))).toBe(GLYPH_INK);
   });
 });
 
@@ -81,17 +98,18 @@ describe("makeScheme", () => {
 });
 
 describe("scheme registry (selectability)", () => {
-  it("defaults to the colorblind-safe scheme", () => {
-    expect(DEFAULT_SCHEME_ID).toBe("colorblind");
-    expect(getScheme(DEFAULT_SCHEME_ID)).toBe(COLORBLIND_SCHEME);
+  it("defaults to the vivid scheme", () => {
+    expect(DEFAULT_SCHEME_ID).toBe("vivid");
+    expect(getScheme(DEFAULT_SCHEME_ID)).toBe(VIVID_SCHEME);
   });
 
   it("falls back to the default for an unknown id", () => {
-    expect(getScheme("does-not-exist")).toBe(COLORBLIND_SCHEME);
+    expect(getScheme("does-not-exist")).toBe(VIVID_SCHEME);
   });
 
   it("lists the built-in schemes", () => {
     const ids = listSchemes().map((s) => s.id);
+    expect(ids).toContain("vivid");
     expect(ids).toContain("colorblind");
     expect(ids).toContain("classic");
   });

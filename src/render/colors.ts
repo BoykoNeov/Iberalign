@@ -4,17 +4,22 @@
 // by id from the registry, or build a custom one with `makeScheme` and add it via
 // `registerScheme` (this is the seam for "let the user choose / customize colors").
 //
-// Two ship in M2 (both nucleotide; protein schemes are later):
-//   - `colorblind` (DEFAULT) — Paul Tol's *bright* qualitative palette, published
-//     as color-vision-deficiency safe. (A CVD-simulator pass is still the right
-//     final QA check — these hexes are chosen from a documented-safe set, not
-//     eyeballed here.)
-//   - `classic` — the conventional vivid mapping: A green, T/U red, C cyan,
-//     G magenta.
+// Three ship now (all nucleotide; protein schemes are later):
+//   - `vivid` (DEFAULT) — bright, saturated red/yellow/green/blue for maximum
+//     on-screen pop, paired with solid-black letters. The blue is a light azure
+//     (not navy) so black glyphs stay legible on it.
+//   - `colorblind` — Paul Tol's *bright* qualitative palette, published as
+//     color-vision-deficiency safe; selectable for users who need it. (A CVD-
+//     simulator pass is still the right final QA check — these hexes are chosen
+//     from a documented-safe set, not eyeballed here.)
+//   - `classic` — the conventional mapping: A green, T/U red, C cyan, G magenta.
+//
+// Every scheme inks residue glyphs solid black (see `GLYPH_INK`) — one ink reads
+// as a single alphabet rather than flickering light/dark per residue.
 //
 // Lookups are O(1): `makeScheme` precomputes 256-entry CSS tables, so the hot
-// draw path never parses a color or does a luminance calc. Case-insensitive
-// (lowercase residues share their uppercase color); `-` and `.` are gaps.
+// draw path never parses a color. Case-insensitive (lowercase residues share
+// their uppercase color); `-` and `.` are gaps.
 
 /** An sRGB color as 0..255 channels. */
 export type Rgb = readonly [number, number, number];
@@ -22,9 +27,11 @@ export type Rgb = readonly [number, number, number];
 const GAP_HYPHEN = 0x2d; // '-'
 const GAP_DOT = 0x2e; // '.'
 
-/** Glyph ink for fills that read as *light* / *dark* (picked by luminance). */
-export const INK_DARK = "#15181c";
-export const INK_LIGHT = "#f7f7f7";
+/** Residue glyph ink — solid black for every residue in every scheme. With the
+ *  vivid fills (and even the muted colorblind-safe ones) black stays legible, and
+ *  a single ink keeps the letters reading as one alphabet. Scoped to residue
+ *  glyphs only: ruler / name-column chrome text keeps its own colors. */
+export const GLYPH_INK = "#000000";
 
 export interface ColorScheme {
   readonly id: string;
@@ -61,15 +68,6 @@ function rgbCss([r, g, b]: Rgb): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-/** Perceived luminance (Rec. 601 weights), 0..1 — enough to pick ink contrast. */
-function perceivedLuminance([r, g, b]: Rgb): number {
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-}
-
-function inkFor(rgb: Rgb): string {
-  return perceivedLuminance(rgb) > 0.5 ? INK_DARK : INK_LIGHT;
-}
-
 /** ASCII-uppercase a byte (`a`..`z` → `A`..`Z`); other bytes pass through. */
 function toUpperByte(byte: number): number {
   return byte >= 0x61 && byte <= 0x7a ? byte - 0x20 : byte;
@@ -92,7 +90,7 @@ export function makeScheme(spec: SchemeSpec): ColorScheme {
       rgb = spec.residues[ch] ?? spec.fallback;
     }
     fill[b] = rgbCss(rgb);
-    ink[b] = inkFor(rgb);
+    ink[b] = GLYPH_INK;
   }
   return {
     id: spec.id,
@@ -113,9 +111,29 @@ const DENSITY_RGB: Rgb = [68, 97, 122];
 const neutrals = { gap: GAP_RGB, fallback: FALLBACK_RGB, background: BG_RGB, densityStyle: DENSITY_RGB };
 
 /**
+ * Vivid nucleotide palette — bright, saturated red / yellow / green / blue. The
+ * DEFAULT: chosen for maximum on-screen pop with solid-black letters. The blue is
+ * a light azure (not navy) so black glyphs stay legible on it. For a palette
+ * verified distinguishable under color-vision deficiency, switch to `colorblind`.
+ */
+export const VIVID_SCHEME: ColorScheme = makeScheme({
+  id: "vivid",
+  label: "Vivid",
+  residues: {
+    A: [34, 195, 42], // green  #22C32A
+    C: [46, 144, 255], // blue   #2E90FF — light azure, keeps black ink legible
+    G: [255, 210, 26], // yellow #FFD21A
+    T: [255, 42, 42], // red    #FF2A2A
+    U: [255, 42, 42], // U shares T
+  },
+  ...neutrals,
+});
+
+/**
  * Color-vision-deficiency-safe nucleotide palette — Paul Tol's *bright*
  * qualitative scheme (green/blue/yellow/red), documented distinguishable under
- * deuteranopia/protanopia. The DEFAULT scheme.
+ * deuteranopia/protanopia. Selectable alongside the vivid default for users who
+ * need it (its hexes are unchanged — the label's promise stays true).
  */
 export const COLORBLIND_SCHEME: ColorScheme = makeScheme({
   id: "colorblind",
@@ -151,11 +169,12 @@ export const CLASSIC_SCHEME: ColorScheme = makeScheme({
 // Registry — the selectable set. Built-ins register at module load; callers add
 // custom schemes with `registerScheme` (e.g. from a color picker in the UI).
 const registry = new Map<string, ColorScheme>();
+registry.set(VIVID_SCHEME.id, VIVID_SCHEME);
 registry.set(COLORBLIND_SCHEME.id, COLORBLIND_SCHEME);
 registry.set(CLASSIC_SCHEME.id, CLASSIC_SCHEME);
 
 /** Id of the scheme used when none is chosen / an unknown id is requested. */
-export const DEFAULT_SCHEME_ID = COLORBLIND_SCHEME.id;
+export const DEFAULT_SCHEME_ID = VIVID_SCHEME.id;
 
 /** Register (or replace) a scheme so it appears in `listSchemes` and `getScheme`. */
 export function registerScheme(scheme: ColorScheme): ColorScheme {
@@ -165,7 +184,7 @@ export function registerScheme(scheme: ColorScheme): ColorScheme {
 
 /** Look up a scheme by id, falling back to the default for an unknown id. */
 export function getScheme(id: string): ColorScheme {
-  return registry.get(id) ?? COLORBLIND_SCHEME;
+  return registry.get(id) ?? VIVID_SCHEME;
 }
 
 /** All registered schemes, in registration order — for a scheme selector. */
@@ -173,7 +192,7 @@ export function listSchemes(): ColorScheme[] {
   return [...registry.values()];
 }
 
-/** The default scheme (CVD-safe). */
+/** The default scheme (vivid). */
 export function defaultScheme(): ColorScheme {
-  return COLORBLIND_SCHEME;
+  return VIVID_SCHEME;
 }
