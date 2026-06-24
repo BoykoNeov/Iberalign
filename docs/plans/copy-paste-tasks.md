@@ -206,7 +206,7 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       effect also clears it on file-open so a prior file's message can't linger. Verify:
       typecheck ✓, 166 vitest ✓, build ✓.
 
-## Batch D — Cut ✅ (code complete + green; GUI smoke pending)
+## Batch D — Cut ✅ (code complete + green; GUI smoke PASSED 2026-06-24)
 
 Built D1+D2+D3 together (one Cut button + one toggle). **Cut = copy THEN remove.**
 Advisor-reviewed before building (greenlit the `SpliceRows` → `SetCells` deviation
@@ -247,11 +247,11 @@ below + the `r1`-clamp fix).
       right-edge (empty `keep` ⇒ pure trailing gaps), stale-`r1` clamp + `r0`-past-end
       no-op. align-core 28 / **iberalign 22 (+4)** / 172 vitest; clippy (iberalign) + fmt
       clean; typecheck + build ✓.
-- [ ] **GUI smoke (human):** select a rect → Cut (Shorten) → cells shift left, trailing
-      gaps appear, width unchanged, block on the clipboard (paste elsewhere to confirm) →
-      Ctrl+Z restores. Toggle to Mask → Cut clears to gaps (+ clipboard). `Ctrl/⌘+X`
-      mirrors the button. Verify a `warn` message (e.g. cut with no selection) stays
-      visible at a normal window width (toolbar is now full — advisor flag #4).
+- [x] **GUI smoke (human) — PASSED 2026-06-24 (user "all works").** Select a rect → Cut
+      (Shorten) → cells shift left, trailing gaps appear, width unchanged, block on the
+      clipboard (paste elsewhere to confirm) → Ctrl+Z restores. Toggle to Mask → Cut clears
+      to gaps (+ clipboard). `Ctrl/⌘+X` mirrors the button. `warn` message (e.g. cut with no
+      selection) stays visible at a normal window width (toolbar is now full — advisor flag #4).
 
 ## Resolved (Batch D)
 

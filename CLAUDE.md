@@ -226,7 +226,7 @@ dependency-light and surface toolchain/linker issues fast.
   vitest; clippy + fmt clean. Advisor-reviewed (post-commit): closed the raw-block output-cap gap
   + added an interior-row (`at < num_rows`) grow undo/redo test. Detail in
   `docs/plans/copy-paste-{plan,context,tasks}.md`.
-- **Cut (Batch D) — code complete + green; GUI smoke pending.** The last copy/paste/cut piece:
+- **Cut (Batch D) — code complete + green; GUI smoke PASSED (2026-06-24, user "all works").** The last copy/paste/cut piece:
   **cut = COPY then REMOVE**, two modes via one toolbar toggle (default **shorten**, user-decided;
   mask is the toggle). Built D1+D2+D3 together. **Cut-shorten** deletes the selected columns in
   the selected rows and shifts each cut row's tail left, trailing-padding `W` gaps back to width —

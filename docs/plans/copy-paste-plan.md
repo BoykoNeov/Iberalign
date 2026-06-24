@@ -92,7 +92,7 @@ tasks.md` "B2 smoke fixes".
 - **C4** Polish: FASTA auto-detect, alphabet-validation warning, size-guard,
   multi-row fill-down geometry, the Insert|Overwrite + shift-mode toggle buttons.
 
-**Batch D — Cut (DONE, green; GUI smoke pending).** Built D1+D2+D3 together (one Cut
+**Batch D — Cut (DONE, green; GUI smoke PASSED 2026-06-24).** Built D1+D2+D3 together (one Cut
 button + a Shorten|Mask toggle, default shorten). Cut = copy THEN remove.
 - **D1** Cut → mask-to-gaps = copy + the existing `clear_cells` (no new backend).
 - **D2** Cut → shorten — delete the selected cols in the cut rows, shift each tail left,
