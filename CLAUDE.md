@@ -286,10 +286,39 @@ dependency-light and surface toolchain/linker issues fast.
   WYSIWYG; the live matrix is untouched (serialization only)** (`model/copy.ts::stripTrailingGaps`).
   align-core 30 / fmt + clippy clean / typecheck clean / **190 vitest** / build OK. Detail in
   `docs/plans/copy-paste-tasks.md` + `selection-tasks.md` (Refinements sections).
-- **Consensus track (Batch 2) + track copy-as-IUPAC (Batch 3) — NEXT, not started.** The
-  M2 `TrackLaneRenderer` is an empty lane; M4 will fill it. Pulled ahead at user request:
-  per-column IUPAC consensus over the selected rows (all if none), painted in the track;
-  then the track itself becomes selectable + copyable as IUPAC ambiguity codes.
+- **Keyboard nucleotide entry (Replace/Insert) — code complete + green; GUI smoke
+  PASSED (2026-06-24, user "all works").** Type a residue at the cursor to write it:
+  **Replace** (default) overwrites in place (`pasteOverwrite` → width-preserving
+  `SetCells`); **Insert** splices a new column into the ACTIVE sequence only
+  (`pasteInsert(…, shiftAll=false)`; other rows trailing-pad to stay rectangular) so the
+  alignment grows. The cursor advances right after each keystroke (`moveCursor`); the
+  **Insert key** and a Toolbar `type: Replace|Insert` toggle switch modes. Pure
+  `model/typing.ts::isResidueKey` (letters either case — soft-masking — plus `- . * ?`;
+  multi-char nav/control keys excluded; gated `!ctrl && !meta && !alt` so Ctrl+A etc. still
+  pass) + `typing.test.ts` (5). ZERO new Rust — rides the tested paste primitives;
+  serialized via `editingRef`; each keystroke is its own undo step (no coalescing yet).
+- **IUPAC consensus track (Batch 2) — code complete + green; GUI smoke PASSED
+  (2026-06-24, user "all works").** The M2 empty `TrackLaneRenderer` now paints a
+  per-column consensus row, column-aligned + scroll-synced under the grid, LOD-aware
+  (letter tier = color fill + glyph; block/density = fill only). Pure
+  `model/consensus.ts::columnConsensus(view, r0, r1)`: DNA/RNA → STRICT presence-union
+  IUPAC (any base present joins the code — user's choice 2026-06-24, no threshold;
+  ambiguity codes expand; RNA emits `U` for pure-T; all-gap → `-`); Protein → plurality
+  (ties → smallest byte). Memoized by view identity; `invalidate()` wired into the edit
+  paths. `consensus.test.ts`. Gutter label is still `cons` (rename → "Consensus" is a
+  Quick-Win in the roadmap below).
+- **Consensus + coloring + shell — large multi-batch; PLANNED, not started.** A big set
+  of user requests (2026-06-24), captured in `docs/plans/consensus-coloring-plan.md`:
+  a configurable consensus (gap-handling pipeline ignore/gap-priority/star → agreement
+  rule strict-IUPAC/all-identical/same-type{R-Y|majority-base|IUPAC-class}/majority(>50%)
+  → no-consensus fallback gap/`*`), a consensus options **dialog**, track + main-grid
+  **conservation coloring**, a **menu bar** replacing the flat toolbar (user-chosen over a
+  gear-dropdown), spacebar→gap, `cons`→`Consensus`, minimap sharpness. Backbone = one
+  cached per-column `profile(view, r0, r1)` deriving the consensus byte AND both colorings.
+  Phasing (user picks the order): Quick-wins → engine → dialog → coloring → shell; Batch-3
+  (track selectable + copy-as-IUPAC) folds in. Advisor-reviewed; user-decided the four open
+  questions (menu bar; same-type exposes all 3 displays; track+grid coloring both; majority
+  default strict >50%).
 
 ## Dev-docs
 
