@@ -29,6 +29,7 @@ import {
 } from "./viewport";
 import {
   type Selection,
+  type SelectionMode,
   setCursor as selSetCursor,
   setActive as selSetActive,
   moveCursor as selMoveCursor,
@@ -36,6 +37,8 @@ import {
   selectAll as selSelectAll,
   collapseSelection as selCollapse,
   clampSelection as selClamp,
+  rowsSelection as selRowsSelection,
+  colsSelection as selColsSelection,
 } from "./selection";
 
 export class GridStore {
@@ -45,6 +48,12 @@ export class GridStore {
   // The cursor + rectangular selection (store-only — no React mirror; the rAF
   // loop's SelectionLayer reads it each dirty frame). `null` ⇒ nothing selected.
   private selection: Selection | null;
+  // How the current selection was made (cell / rows / cols). The rectangle shape
+  // is the same; this records the INTENT, so the Delete-key branch and the
+  // consensus row scope can tell "whole sequences picked from the gutter" from "a
+  // free cell rectangle". Meaningless when `selection` is null. Reset to "cell" on
+  // load and whenever a cell-style mutator runs.
+  private selectionMode: SelectionMode;
   // Optional coarse listener fired on every selection change (set/extend/move/
   // clear/load). The grid uses it to mirror the selection into React for the
   // status readout ONLY — throttled there to rect identity, never per frame. The
@@ -56,6 +65,7 @@ export class GridStore {
     this.dims = { cols: 0, rows: 0 };
     this.dirty = false;
     this.selection = null;
+    this.selectionMode = "cell";
   }
 
   /** Snapshot of the current viewport (read by the rAF draw loop each tick). */
@@ -86,6 +96,13 @@ export class GridStore {
     return this.selection;
   }
 
+  /** How the current selection was made (cell / rows / cols) — drives the
+   *  Delete-key branch and the consensus row scope. Meaningless when nothing is
+   *  selected. */
+  getSelectionMode(): SelectionMode {
+    return this.selectionMode;
+  }
+
   /** Register the coarse selection-change listener (the React status readout).
    *  Replaces any previous listener; pass `undefined` to detach. */
   setSelectionListener(cb: ((sel: Selection | null) => void) | undefined): void {
@@ -98,6 +115,7 @@ export class GridStore {
   setDims(cols: number, rows: number): void {
     this.dims = { cols, rows };
     this.selection = null;
+    this.selectionMode = "cell";
     this.onSelectionChange?.(null);
     this.mutate(clamp({ ...this.viewport, scrollX: 0, scrollY: 0 }, this.dims));
   }
@@ -177,6 +195,28 @@ export class GridStore {
     this.setSelection(selSelectAll(this.dims));
   }
 
+  /** Select whole sequences (rows) from the name gutter — a full-WIDTH, row-mode
+   *  selection. `extend` keeps the existing row anchor (Shift+click / drag) when
+   *  already in row-mode; otherwise it starts a fresh single-row selection. No
+   *  scroll (the clicked row is already under the cursor). */
+  selectRow(row: number, extend: boolean): void {
+    const anchorRow =
+      extend && this.selection && this.selectionMode === "rows"
+        ? this.selection.anchor.row
+        : row;
+    this.setSelection(selRowsSelection(anchorRow, row, this.dims), undefined, "rows");
+  }
+
+  /** Select whole columns from the ruler — a full-HEIGHT, column-mode selection.
+   *  Mirror of {@link selectRow}. No scroll. */
+  selectCol(col: number, extend: boolean): void {
+    const anchorCol =
+      extend && this.selection && this.selectionMode === "cols"
+        ? this.selection.anchor.col
+        : col;
+    this.setSelection(selColsSelection(anchorCol, col, this.dims), undefined, "cols");
+  }
+
   /** Collapse the rectangle to its active cell (Esc). No-op when nothing is
    *  selected. */
   collapseSelection(): void {
@@ -188,15 +228,18 @@ export class GridStore {
   clearSelection(): void {
     if (this.selection === null) return;
     this.selection = null;
+    this.selectionMode = "cell";
     this.dirty = true;
     this.onSelectionChange?.(null);
   }
 
   /** The single selection write path: swap in the next selection (and optionally
-   *  a scrolled viewport, for cursor moves), always mark dirty, and notify the
-   *  coarse listener. */
-  private setSelection(next: Selection, viewport?: Viewport): void {
+   *  a scrolled viewport, for cursor moves) plus its `mode` (default "cell" — the
+   *  free-rectangle mutators), always mark dirty, and notify the coarse listener.
+   *  The header gestures pass "rows"/"cols". */
+  private setSelection(next: Selection, viewport?: Viewport, mode: SelectionMode = "cell"): void {
     this.selection = next;
+    this.selectionMode = mode;
     if (viewport) this.viewport = viewport;
     this.dirty = true;
     this.onSelectionChange?.(next);

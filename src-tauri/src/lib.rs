@@ -23,6 +23,8 @@ pub fn run() {
             commands::paste_overwrite,
             commands::paste_insert,
             commands::paste_sequences,
+            commands::delete_rows,
+            commands::delete_columns,
             commands::undo_edit,
             commands::redo_edit
         ])

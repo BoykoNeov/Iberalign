@@ -42,6 +42,7 @@ import { computeHover, cellAtPixel, type HoverInfo } from "./hover";
 import StatusBar from "./StatusBar";
 import Toolbar from "./Toolbar";
 import { normalize, rectDims, type CellRect } from "../state/selection";
+import { xToCol, yToRow } from "../render/viewport";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
 import {
   looksLikeFasta,
@@ -57,11 +58,14 @@ import {
   pasteInsert,
   pasteOverwrite,
   pasteSequences,
+  deleteRows,
+  deleteColumns,
+  type DeleteResult,
   undoEdit,
   redoEdit,
 } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
-import type { PasteMode, CutMode } from "./Toolbar";
+import type { PasteMode, CutMode, DeleteMode } from "./Toolbar";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -175,6 +179,12 @@ export default function Grid({ view, onResized }: GridProps) {
   // bound Ctrl/⌘+X path, same as `pasteMode`.
   const [cutMode, setCutMode] = useState<CutMode>("shorten");
   const cutModeRef = useRef<CutMode>("shorten");
+  // Delete-key mode (Shorten | Mask), default Shorten (user-decided). Shorten makes
+  // Delete structural — remove the selected sequences (rows) / columns, or shift a
+  // cell block left; Mask is the old behavior (clear the cells to gaps, geometry
+  // unchanged). The ref shadows it for the once-bound keydown handler.
+  const [deleteMode, setDeleteMode] = useState<DeleteMode>("shorten");
+  const deleteModeRef = useRef<DeleteMode>("shorten");
   // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
   // red, `info` (copied / inserted) is plain. The message PERSISTS — it does not
   // time out; it clears when the user takes their next action (see the effect below)
@@ -188,6 +198,21 @@ export default function Grid({ view, onResized }: GridProps) {
   // Cut bridge: like `doPaste`, `doCut` is effect-scoped (it needs `runEdit`), so
   // the toolbar Cut button + Ctrl/⌘+X reach it through this ref.
   const doCutRef = useRef<() => void>(() => {});
+  // Structural-delete bridges: `doDeleteRows`/`doDeleteColumns` are effect-scoped
+  // (they need the resync helper), so the toolbar buttons, the context menu, and
+  // the Delete key reach them through these refs.
+  const doDeleteRowsRef = useRef<() => void>(() => {});
+  const doDeleteColumnsRef = useRef<() => void>(() => {});
+
+  // Right-click context menu (row gutter → delete sequences; ruler → delete
+  // columns; grid → both). The ONLY menu in the app, so it's a small inline
+  // component: position + the item list. `null` when closed. Opened from native
+  // handlers in the mount effect (via the stable `setCtxMenu`).
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    items: { label: string; onClick: () => void }[];
+  } | null>(null);
 
   // Guards against overlapping edits: a held Ctrl+Z would otherwise fire
   // concurrent undo() invokes whose completion order Tauri doesn't guarantee.
@@ -306,6 +331,31 @@ export default function Grid({ view, onResized }: GridProps) {
 
   // Toolbar Cut button → the effect-scoped cut flow (via the ref above).
   const handleCut = useCallback(() => doCutRef.current(), []);
+
+  // Toggle the Delete-key mode (Shorten | Mask) from the toolbar; mirror into the
+  // ref the once-bound keydown reads.
+  const handleSetDeleteMode = useCallback((mode: DeleteMode) => {
+    deleteModeRef.current = mode;
+    setDeleteMode(mode);
+  }, []);
+
+  // Toolbar Del Rows / Del Cols buttons → the effect-scoped structural deletes.
+  const handleDeleteRows = useCallback(() => doDeleteRowsRef.current(), []);
+  const handleDeleteColumns = useCallback(() => doDeleteColumnsRef.current(), []);
+
+  // Close the context menu on Escape (capture phase, so it beats the grid's
+  // window keydown, which would otherwise also collapse the selection).
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setCtxMenu(null);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [ctxMenu]);
 
   // Mount once: build store/renderer/loop, attach input, start drawing. Has no
   // `view` dependency — the view-change effect below feeds dims; this keeps a new
@@ -803,6 +853,228 @@ export default function Grid({ view, onResized }: GridProps) {
     };
     doCutRef.current = doCut;
 
+    // Run a STRUCTURAL delete (rows or columns): invoke the IPC op (returns the
+    // post-delete dimensions), then re-sync the whole view from the authoritative
+    // meta + render buffer — a structural delete changes the row count and/or the
+    // width, so it can't ride the fast in-place path. This is also the ONLY path
+    // that survives the empty edges: delete-every-row (0 rows) and delete-every-
+    // column (0 width) both come back as an empty buffer that `applyResynced` (→
+    // `replaceAll`) handles, leaving an empty-but-undoable alignment. After the
+    // resync the cursor collapses to the start of the deleted region (clamped), or
+    // clears when the alignment is now empty. Serialized via `editingRef`.
+    const runStructuralDelete = async (
+      op: () => Promise<DeleteResult>,
+      collapse: { row: number; col: number },
+    ): Promise<DeleteResult | null> => {
+      const v = viewRef.current;
+      if (!v || editingRef.current) return null;
+      editingRef.current = true;
+      try {
+        const res = await op();
+        const [meta, bytes] = await Promise.all([getAlignmentMeta(), getRenderBuffer()]);
+        applyResynced(bytes, meta.names);
+        if (v.numRows > 0 && v.width > 0) store.setCursor(collapse.row, collapse.col);
+        else store.clearSelection();
+        return res;
+      } catch (err) {
+        showMsg(`Delete failed: ${String(err)}`, "warn");
+        return null;
+      } finally {
+        editingRef.current = false;
+      }
+    };
+
+    // Delete the selected sequences (rows) — the selection's row-span. Removes the
+    // sequences (names included) from the alignment; reversible with Ctrl/⌘+Z.
+    const doDeleteRows = async () => {
+      const v = viewRef.current;
+      if (!v) return;
+      const sel = store.getSelection();
+      if (!sel) {
+        showMsg("Select sequences (rows) to delete", "warn");
+        return;
+      }
+      const rect = normalize(sel);
+      const before = v.numRows;
+      const res = await runStructuralDelete(() => deleteRows(rect.r0, rect.r1 - rect.r0 + 1), {
+        row: rect.r0,
+        col: rect.c0,
+      });
+      if (!res) return;
+      const removed = before - res.numRows;
+      const empty = res.numRows === 0;
+      showMsg(
+        `Deleted ${removed} sequence${removed === 1 ? "" : "s"}` +
+          (empty ? " — alignment empty (undo to restore)" : ""),
+        empty ? "warn" : "info",
+      );
+    };
+    doDeleteRowsRef.current = () => void doDeleteRows();
+
+    // Delete the selected columns — the selection's column-span — from EVERY row.
+    // The alignment narrows (width-shrinking); reversible with Ctrl/⌘+Z.
+    const doDeleteColumns = async () => {
+      const v = viewRef.current;
+      if (!v) return;
+      const sel = store.getSelection();
+      if (!sel) {
+        showMsg("Select columns to delete", "warn");
+        return;
+      }
+      const rect = normalize(sel);
+      const beforeW = v.width;
+      const res = await runStructuralDelete(() => deleteColumns(rect.c0, rect.c1), {
+        row: rect.r0,
+        col: rect.c0,
+      });
+      if (!res) return;
+      const removed = beforeW - res.width;
+      const empty = res.width === 0;
+      showMsg(
+        `Deleted ${removed} column${removed === 1 ? "" : "s"}` +
+          (empty ? " — alignment empty (undo to restore)" : ""),
+        empty ? "warn" : "info",
+      );
+    };
+    doDeleteColumnsRef.current = () => void doDeleteColumns();
+
+    // ---- header (name gutter / ruler) selection + context menus ----------------
+    //
+    // The name column and ruler scroll-sync with the grid (same `1fr` track), so a
+    // gutter y maps to a row via `yToRow` and a ruler x to a column via `xToCol`
+    // against the live viewport — the same transform the grid cells use. Clicking
+    // selects a whole sequence / column (full-span, row-/col-MODE so Delete knows
+    // the intent); drag and Shift+click extend. Pointer capture keeps a drag alive
+    // past the gutter edges. Right-click opens the delete context menu.
+    const nameEl = nameRef.current!;
+    const rulerEl = rulerRef.current!;
+
+    const rowAtClientY = (clientY: number): number | null => {
+      const v = viewRef.current;
+      if (!v || v.numRows === 0) return null;
+      const r = nameEl.getBoundingClientRect();
+      const row = yToRow(store.getViewport(), clientY - r.top);
+      return Math.min(Math.max(0, row), v.numRows - 1);
+    };
+    const colAtClientX = (clientX: number): number | null => {
+      const v = viewRef.current;
+      if (!v || v.width === 0) return null;
+      const r = rulerEl.getBoundingClientRect();
+      const col = xToCol(store.getViewport(), clientX - r.left);
+      return Math.min(Math.max(0, col), v.width - 1);
+    };
+
+    let nameSelecting = false;
+    const onNameDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const row = rowAtClientY(e.clientY);
+      if (row === null) return;
+      e.preventDefault();
+      cell.focus({ preventScroll: true });
+      nameSelecting = true;
+      nameEl.setPointerCapture(e.pointerId);
+      store.selectRow(row, e.shiftKey);
+    };
+    const onNameMove = (e: PointerEvent) => {
+      if (!nameSelecting) return;
+      const row = rowAtClientY(e.clientY);
+      if (row !== null) store.selectRow(row, true); // extend from the down anchor
+    };
+    const endName = (e: PointerEvent) => {
+      if (!nameSelecting) return;
+      nameSelecting = false;
+      if (nameEl.hasPointerCapture(e.pointerId)) nameEl.releasePointerCapture(e.pointerId);
+    };
+
+    let rulerSelecting = false;
+    const onRulerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const col = colAtClientX(e.clientX);
+      if (col === null) return;
+      e.preventDefault();
+      cell.focus({ preventScroll: true });
+      rulerSelecting = true;
+      rulerEl.setPointerCapture(e.pointerId);
+      store.selectCol(col, e.shiftKey);
+    };
+    const onRulerMove = (e: PointerEvent) => {
+      if (!rulerSelecting) return;
+      const col = colAtClientX(e.clientX);
+      if (col !== null) store.selectCol(col, true);
+    };
+    const endRuler = (e: PointerEvent) => {
+      if (!rulerSelecting) return;
+      rulerSelecting = false;
+      if (rulerEl.hasPointerCapture(e.pointerId)) rulerEl.releasePointerCapture(e.pointerId);
+    };
+
+    // Right-click the name gutter → "Delete N sequence(s)". If the clicked row is
+    // outside the current row-selection, select just that row first (so the menu
+    // always acts on something sensible under the cursor).
+    const onNameContext = (e: MouseEvent) => {
+      const row = rowAtClientY(e.clientY);
+      if (row === null) return;
+      e.preventDefault();
+      const sel = store.getSelection();
+      const r = sel ? normalize(sel) : null;
+      const within = r !== null && store.getSelectionMode() === "rows" && row >= r.r0 && row <= r.r1;
+      if (!within) store.selectRow(row, false);
+      const cur = store.getSelection();
+      const n = cur ? rectDims(normalize(cur)).rows : 1;
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: `Delete ${n} sequence${n === 1 ? "" : "s"}`, onClick: () => doDeleteRows() },
+        ],
+      });
+    };
+    // Right-click the ruler → "Delete N column(s)", same select-under-cursor rule.
+    const onRulerContext = (e: MouseEvent) => {
+      const col = colAtClientX(e.clientX);
+      if (col === null) return;
+      e.preventDefault();
+      const sel = store.getSelection();
+      const r = sel ? normalize(sel) : null;
+      const within = r !== null && store.getSelectionMode() === "cols" && col >= r.c0 && col <= r.c1;
+      if (!within) store.selectCol(col, false);
+      const cur = store.getSelection();
+      const n = cur ? rectDims(normalize(cur)).cols : 1;
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [{ label: `Delete ${n} column${n === 1 ? "" : "s"}`, onClick: () => doDeleteColumns() }],
+      });
+    };
+    // Right-click inside the grid → both delete options scoped to the current
+    // selection rectangle (nothing selected ⇒ no menu, fall through to default).
+    const onCellContext = (e: MouseEvent) => {
+      const sel = store.getSelection();
+      if (!sel) return;
+      e.preventDefault();
+      const d = rectDims(normalize(sel));
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: `Delete ${d.rows} sequence${d.rows === 1 ? "" : "s"}`, onClick: () => doDeleteRows() },
+          { label: `Delete ${d.cols} column${d.cols === 1 ? "" : "s"}`, onClick: () => doDeleteColumns() },
+        ],
+      });
+    };
+
+    nameEl.addEventListener("pointerdown", onNameDown);
+    nameEl.addEventListener("pointermove", onNameMove);
+    nameEl.addEventListener("pointerup", endName);
+    nameEl.addEventListener("pointercancel", endName);
+    nameEl.addEventListener("contextmenu", onNameContext);
+    rulerEl.addEventListener("pointerdown", onRulerDown);
+    rulerEl.addEventListener("pointermove", onRulerMove);
+    rulerEl.addEventListener("pointerup", endRuler);
+    rulerEl.addEventListener("pointercancel", endRuler);
+    rulerEl.addEventListener("contextmenu", onRulerContext);
+    cell.addEventListener("contextmenu", onCellContext);
+
     // Keyboard cursor movement (cell is focusable). Arrows move the cursor (the
     // M2 arrow-PAN is gone — see selection-plan.md); Shift+arrows extend the
     // rectangle; Page moves a page of rows; Home/End jump to the row's left/right
@@ -853,14 +1125,25 @@ export default function Grid({ view, onResized }: GridProps) {
         void doCut();
         return;
       }
-      // Delete / Backspace — clear (mask to gaps) the selected rectangle, WITHOUT
-      // copying to the clipboard (the uncapped masking path; Cut = copy + remove is
-      // Ctrl/⌘+X above). No selection ⇒ nothing to delete.
+      // Delete / Backspace — governed by the Delete-key mode toggle (no clipboard;
+      // Cut = copy + remove is Ctrl/⌘+X above). No selection ⇒ nothing to delete.
+      //   - Mask: clear the selected cells to gaps (geometry unchanged — the old
+      //     behavior, and the uncapped masking escape hatch).
+      //   - Shorten: structural, by HOW the selection was made — whole sequences
+      //     (rows-mode) are removed, whole columns (cols-mode) are removed, and a
+      //     free cell rectangle is shortened (its columns shift left, width kept,
+      //     == cut-shorten without the clipboard copy).
       if (e.key === "Delete" || e.key === "Backspace") {
         const sel = store.getSelection();
-        if (sel) {
-          e.preventDefault();
+        if (!sel) return;
+        e.preventDefault();
+        if (deleteModeRef.current === "mask") {
           void runEdit(() => clearCells(normalize(sel)));
+        } else {
+          const mode = store.getSelectionMode();
+          if (mode === "rows") void doDeleteRows();
+          else if (mode === "cols") void doDeleteColumns();
+          else void runEdit(() => cutShorten(normalize(sel)));
         }
         return;
       }
@@ -1064,6 +1347,17 @@ export default function Grid({ view, onResized }: GridProps) {
       canvas.removeEventListener("pointerup", endPointer);
       canvas.removeEventListener("pointercancel", endPointer);
       canvas.removeEventListener("pointerleave", onPointerLeave);
+      nameEl.removeEventListener("pointerdown", onNameDown);
+      nameEl.removeEventListener("pointermove", onNameMove);
+      nameEl.removeEventListener("pointerup", endName);
+      nameEl.removeEventListener("pointercancel", endName);
+      nameEl.removeEventListener("contextmenu", onNameContext);
+      rulerEl.removeEventListener("pointerdown", onRulerDown);
+      rulerEl.removeEventListener("pointermove", onRulerMove);
+      rulerEl.removeEventListener("pointerup", endRuler);
+      rulerEl.removeEventListener("pointercancel", endRuler);
+      rulerEl.removeEventListener("contextmenu", onRulerContext);
+      cell.removeEventListener("contextmenu", onCellContext);
       window.removeEventListener("keydown", onKeyDown);
       vThumb.removeEventListener("pointerdown", onVThumbDown);
       vThumb.removeEventListener("pointermove", onVThumbMove);
@@ -1101,6 +1395,8 @@ export default function Grid({ view, onResized }: GridProps) {
     // A message about the previous file (e.g. "Inserted 3 sequences") would
     // otherwise persist across the load — clear it.
     setCopyMsg(null);
+    // A delete menu from the previous alignment must not linger over the new one.
+    setCtxMenu(null);
   }, [view]);
 
   // Zoom to an absolute cell size in CSS px (the status-bar slider). There is no
@@ -1140,6 +1436,10 @@ export default function Grid({ view, onResized }: GridProps) {
         onSetShiftAll={handleSetShiftAll}
         cutMode={cutMode}
         onSetCutMode={handleSetCutMode}
+        deleteMode={deleteMode}
+        onSetDeleteMode={handleSetDeleteMode}
+        onDeleteRows={handleDeleteRows}
+        onDeleteColumns={handleDeleteColumns}
         onCopy={doCopy}
         onPaste={handlePaste}
         onCut={handleCut}
@@ -1185,6 +1485,40 @@ export default function Grid({ view, onResized }: GridProps) {
         aria-label="Alignment minimap — click or drag to navigate"
       />
       <StatusBar hover={hover} zoom={zoom} onZoomTo={handleZoomTo} />
+      {/* Right-click delete menu. A full-screen backdrop closes it on an outside
+          press; the menu stops propagation so a press on it doesn't self-close
+          before the item handler runs. Positioned at the click in viewport px
+          (the backdrop is fixed-inset, so left/top are client coords). */}
+      {ctxMenu && (
+        <div
+          className="ctx-backdrop"
+          onMouseDown={() => setCtxMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setCtxMenu(null);
+          }}
+        >
+          <ul
+            className="ctx-menu"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {ctxMenu.items.map((it, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCtxMenu(null);
+                    it.onClick();
+                  }}
+                >
+                  {it.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

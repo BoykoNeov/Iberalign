@@ -17,6 +17,8 @@ import {
   collapseSelection,
   normalize,
   rectDims,
+  rowsSelection,
+  colsSelection,
 } from "./selection";
 
 const DIMS: Dims = { cols: 100, rows: 40 };
@@ -149,5 +151,42 @@ describe("normalize + rectDims", () => {
 
   it("a single cell is a 1×1 rectangle", () => {
     expect(rectDims(normalize(single(3, 3)))).toEqual({ rows: 1, cols: 1 });
+  });
+});
+
+describe("rowsSelection — full-width row-mode selection (name gutter)", () => {
+  it("a single row spans every column", () => {
+    // One clicked row → the whole sequence: cols 0..cols-1, so a row delete / a
+    // row-scoped consensus reads the entire row.
+    expect(normalize(rowsSelection(5, 5, DIMS))).toEqual({ r0: 5, r1: 5, c0: 0, c1: 99 });
+  });
+
+  it("a row range keeps the anchor row and spans full width (any drag order)", () => {
+    expect(normalize(rowsSelection(3, 9, DIMS))).toEqual({ r0: 3, r1: 9, c0: 0, c1: 99 });
+    // Dragging UP past the anchor normalizes the same way.
+    expect(normalize(rowsSelection(9, 3, DIMS))).toEqual({ r0: 3, r1: 9, c0: 0, c1: 99 });
+  });
+
+  it("clamps an out-of-range row to the last sequence", () => {
+    expect(normalize(rowsSelection(999, 999, DIMS))).toEqual({ r0: 39, r1: 39, c0: 0, c1: 99 });
+  });
+
+  it("an empty alignment collapses to (0,0) without going negative", () => {
+    expect(rowsSelection(0, 0, { cols: 0, rows: 0 })).toEqual(single(0, 0));
+  });
+});
+
+describe("colsSelection — full-height column-mode selection (ruler)", () => {
+  it("a single column spans every row", () => {
+    expect(normalize(colsSelection(7, 7, DIMS))).toEqual({ r0: 0, r1: 39, c0: 7, c1: 7 });
+  });
+
+  it("a column range keeps the anchor col and spans full height (any drag order)", () => {
+    expect(normalize(colsSelection(2, 10, DIMS))).toEqual({ r0: 0, r1: 39, c0: 2, c1: 10 });
+    expect(normalize(colsSelection(10, 2, DIMS))).toEqual({ r0: 0, r1: 39, c0: 2, c1: 10 });
+  });
+
+  it("clamps an out-of-range column to the last column", () => {
+    expect(normalize(colsSelection(999, 999, DIMS))).toEqual({ r0: 0, r1: 39, c0: 99, c1: 99 });
   });
 });

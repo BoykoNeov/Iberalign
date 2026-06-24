@@ -71,6 +71,14 @@
   min-height: 0;
 }
 
+/* The name gutter and ruler are click/drag-selectable (whole sequences / columns)
+ * and right-click-deletable — show a pointer and own the pointer for the drag. */
+.grid-names,
+.grid-ruler {
+  cursor: pointer;
+  touch-action: none;
+}
+
 /* Whole-alignment minimap strip — a fixed band below the grid, above the status
  * bar, spanning the full shell width. Painted by MinimapLayer on the shared rAF
  * loop; click/drag navigates (handlers in Grid.tsx), so it shows a pointer. */
@@ -220,6 +228,62 @@
 
 .grid-canvas:not(.dragging) {
   cursor: cell;
+}
+
+/* Right-click delete menu (Grid.tsx). The backdrop is a full-viewport catch layer
+ * (closes the menu on any outside press); the menu floats at the click point. Only
+ * menu in the app, so the styling lives here rather than a shared component. */
+.ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+}
+
+.ctx-menu {
+  position: fixed;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 160px;
+  background: #ffffff;
+  border: 1px solid #cdd2d6;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 0.82rem;
+}
+
+.ctx-menu li {
+  margin: 0;
+}
+
+.ctx-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #2a2d30;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ctx-menu button:hover,
+.ctx-menu button:focus-visible {
+  background: #396cd8;
+  color: #ffffff;
+  outline: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ctx-menu {
+    background: #2a2d30;
+    border-color: #444;
+  }
+  .ctx-menu button {
+    color: #d6d9dc;
+  }
 }
 
 /* Status bar — the pinned readout strip at the bottom of the shell. Matches the

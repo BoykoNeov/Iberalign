@@ -50,6 +50,37 @@ export function setCursor(row: number, col: number, dims: Dims): Selection {
   return { anchor: c, active: c };
 }
 
+/** How a selection was created — drives what Delete and the consensus track read.
+ *  `cell`: a free rectangle (grid drag / arrows / select-all). `rows`: whole
+ *  sequences picked from the name gutter (spans every column). `cols`: whole
+ *  columns picked from the ruler (spans every row). The rectangle shape is the
+ *  same either way; only the intent differs. Stored alongside the `Selection` in
+ *  `GridStore` (the pure reducers here don't carry it). */
+export type SelectionMode = "cell" | "rows" | "cols";
+
+/** A full-WIDTH selection of the rows between `anchorRow` and `activeRow`
+ *  (name-gutter / row-mode): the rectangle spans every column, so a row delete or
+ *  a row-scoped consensus reads the whole sequence. `active` (the moving end)
+ *  carries `activeRow`; the anchor pivots a Shift-extend. Clamped to `dims`. */
+export function rowsSelection(anchorRow: number, activeRow: number, dims: Dims): Selection {
+  const lastCol = Math.max(0, dims.cols - 1);
+  return {
+    anchor: clampCell({ row: anchorRow, col: 0 }, dims),
+    active: clampCell({ row: activeRow, col: lastCol }, dims),
+  };
+}
+
+/** A full-HEIGHT selection of the columns between `anchorCol` and `activeCol`
+ *  (ruler / column-mode): spans every row, so a column delete hits the whole
+ *  alignment. Mirror of {@link rowsSelection}. Clamped to `dims`. */
+export function colsSelection(anchorCol: number, activeCol: number, dims: Dims): Selection {
+  const lastRow = Math.max(0, dims.rows - 1);
+  return {
+    anchor: clampCell({ row: 0, col: anchorCol }, dims),
+    active: clampCell({ row: lastRow, col: activeCol }, dims),
+  };
+}
+
 /**
  * Move the cursor by `(dr, dc)` and COLLAPSE: the result is always a single cell
  * at `active + delta` (clamped), so a plain arrow over a live rectangle deselects

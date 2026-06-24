@@ -21,6 +21,12 @@ export type PasteMode = "insert" | "overwrite";
  *  gaps). Default shorten. */
 export type CutMode = "shorten" | "mask";
 
+/** Delete-KEY mode (Delete / Backspace): `shorten` (default) structurally removes
+ *  — selected sequences (rows) or columns, or shifts a cell block left; `mask`
+ *  clears the selected cells to gaps (geometry unchanged — the old behavior).
+ *  The explicit Del Rows / Del Cols buttons are always structural regardless. */
+export type DeleteMode = "shorten" | "mask";
+
 interface ToolbarProps {
   /** The selection size for the readout, or `null` when nothing is selected. */
   selInfo: { rows: number; cols: number } | null;
@@ -37,6 +43,14 @@ interface ToolbarProps {
   /** The active cut mode (the Shorten|Mask toggle). */
   cutMode: CutMode;
   onSetCutMode: (mode: CutMode) => void;
+  /** The active Delete-key mode (the Shorten|Mask toggle for Delete/Backspace). */
+  deleteMode: DeleteMode;
+  onSetDeleteMode: (mode: DeleteMode) => void;
+  /** Delete the selected sequences (rows) — structural, removes them. No-op
+   *  upstream when nothing is selected. */
+  onDeleteRows: () => void;
+  /** Delete the selected columns from every sequence — the alignment narrows. */
+  onDeleteColumns: () => void;
   /** Copy the current selection (a no-op upstream when nothing is selected). */
   onCopy: () => void;
   /** Paste the clipboard (FASTA ⇒ new sequences; else a block in the paste mode). */
@@ -58,6 +72,10 @@ export default function Toolbar({
   onSetShiftAll,
   cutMode,
   onSetCutMode,
+  deleteMode,
+  onSetDeleteMode,
+  onDeleteRows,
+  onDeleteColumns,
   onCopy,
   onPaste,
   onCut,
@@ -190,6 +208,48 @@ export default function Toolbar({
           aria-pressed={cutMode === "mask"}
           onClick={() => onSetCutMode("mask")}
           title="Mask — clear the selected cells to gaps (like Delete, but the cells are copied first)"
+        >
+          Mask
+        </button>
+      </span>
+
+      <button
+        type="button"
+        className="toolbar-btn"
+        onClick={onDeleteRows}
+        disabled={!hasSel}
+        title="Delete the selected sequences (rows) — removes them from the alignment (undo with Ctrl/⌘+Z)"
+      >
+        Del Rows
+      </button>
+
+      <button
+        type="button"
+        className="toolbar-btn"
+        onClick={onDeleteColumns}
+        disabled={!hasSel}
+        title="Delete the selected columns from every sequence — the alignment narrows (undo with Ctrl/⌘+Z)"
+      >
+        Del Cols
+      </button>
+
+      <span className="toolbar-label">del key</span>
+      <span className="toolbar-toggle" role="group" aria-label="Delete key mode">
+        <button
+          type="button"
+          className={deleteMode === "shorten" ? "toggle-on" : ""}
+          aria-pressed={deleteMode === "shorten"}
+          onClick={() => onSetDeleteMode("shorten")}
+          title="Delete removes & shortens — whole rows/columns when those are selected, or a cell block shifts left"
+        >
+          Shorten
+        </button>
+        <button
+          type="button"
+          className={deleteMode === "mask" ? "toggle-on" : ""}
+          aria-pressed={deleteMode === "mask"}
+          onClick={() => onSetDeleteMode("mask")}
+          title="Delete clears the selected cells to gaps — geometry unchanged (the old behavior)"
         >
           Mask
         </button>

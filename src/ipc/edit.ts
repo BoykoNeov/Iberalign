@@ -82,6 +82,46 @@ export function pasteSequences(at: number, text: string): Promise<PasteSeqResult
   return invoke<PasteSeqResult>("paste_sequences", { at, text });
 }
 
+/** Post-delete dimensions of a STRUCTURAL delete (rows or columns) — mirror of
+ *  the Rust `DeleteResultDto`. A structural delete changes the row count and/or
+ *  the width, so (unlike the in-place edits) the caller re-syncs its whole view
+ *  from `getAlignmentMeta` + `getRenderBuffer` rather than swapping a fixed buffer.
+ *  `numRows === 0` (deleted every row) and `width === 0` (deleted every column)
+ *  are the legal empty-alignment states. */
+export interface DeleteResult {
+  numRows: number;
+  width: number;
+}
+
+interface DeleteResultWire {
+  num_rows: number;
+  width: number;
+}
+
+/**
+ * Delete whole sequences (rows) `at..at+count`, removing them from the alignment
+ * AND the sequence list (the names follow). Reversible — undo re-inserts them
+ * verbatim. `at`/`count` are clamped to the current rows in Rust, so a stale
+ * selection can't error. Returns the post-delete dimensions; the caller re-syncs
+ * its view (a row-count change reuses the load path, robust to the 0-row edge).
+ */
+export async function deleteRows(at: number, count: number): Promise<DeleteResult> {
+  const wire = await invoke<DeleteResultWire>("delete_rows", { at, count });
+  return { numRows: wire.num_rows, width: wire.width };
+}
+
+/**
+ * Delete columns `c0..=c1` from EVERY row — a width-SHRINKING structural column
+ * delete (the alignment narrows; distinct from cut-shorten, which only shifts the
+ * selected rows and keeps the width). Reversible — undo re-inserts the columns.
+ * `c1` is clamped to the last column; deleting every column is allowed and leaves
+ * width 0. Returns the post-delete dimensions; the caller re-syncs its view.
+ */
+export async function deleteColumns(c0: number, c1: number): Promise<DeleteResult> {
+  const wire = await invoke<DeleteResultWire>("delete_columns", { c0, c1 });
+  return { numRows: wire.num_rows, width: wire.width };
+}
+
 /** Undo the most recent edit. Empty result ⇒ nothing to undo. */
 export function undoEdit(): Promise<Uint8Array> {
   return editBuffer("undo_edit");

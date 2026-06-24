@@ -669,6 +669,109 @@ pub async fn paste_sequences(
     })
 }
 
+/// Post-delete dimensions of a STRUCTURAL delete (rows or columns). Unlike the
+/// in-place edits, a structural delete changes the row count and/or the width, so
+/// the frontend re-syncs its whole view from `get_alignment_meta` + the render
+/// buffer (the load path), exactly like [`paste_sequences`] — it does NOT ride
+/// the empty-bytes-means-no-op transport, which can't tell a real width-0 result
+/// (delete every column) from an actual no-op. `num_rows == 0` (delete every row)
+/// and `width == 0` (delete every column) are the legal empty-alignment states the
+/// frontend renders as "nothing loaded but undoable".
+#[derive(Serialize)]
+pub struct DeleteResultDto {
+    pub num_rows: usize,
+    pub width: usize,
+}
+
+/// Splices that delete columns `c0..=c1` from EVERY row — a width-SHRINKING
+/// structural column delete. Distinct from [`cut_shorten_writes`], which only
+/// shifts within the *selected* rows and trailing-pads back to width (preserving
+/// it): this removes the columns from the whole alignment so it narrows. Each row
+/// gets one `remove = W = c1-c0+1` splice at `c0` (no replacement bytes), so every
+/// row shrinks by the same `W` and the single-width invariant holds. `c1` is
+/// clamped to the last column; an empty/zero-width alignment or a `c0` past the
+/// right edge yields no splices (a graceful no-op). Deleting every column is
+/// allowed and leaves width 0.
+fn delete_columns_splices(ds: &Dataset, c0: usize, c1: usize) -> Vec<RowSplice> {
+    let width = ds.alignment.width;
+    let num_rows = ds.alignment.num_rows();
+    if num_rows == 0 || width == 0 || c0 >= width {
+        return Vec::new();
+    }
+    let c1 = c1.min(width - 1);
+    let w = c1 - c0 + 1;
+    (0..num_rows)
+        .map(|row| RowSplice {
+            row,
+            col: c0,
+            remove: w,
+            bytes: Vec::new(),
+        })
+        .collect()
+}
+
+/// Delete whole sequences (rows) `at..at+count`, removing them from the alignment
+/// AND the sequence list — the inverse re-inserts them verbatim (ids/names/gapped),
+/// so undo restores them in place. Reversible through the edit history. `at` and
+/// `count` are clamped to the current row set (a stale selection can't error), so
+/// `count == 0` after clamping is a no-op. Returns the post-delete dimensions; the
+/// frontend re-syncs its view (a row-count change reuses the load path). Errors if
+/// nothing is loaded.
+#[tauri::command]
+pub async fn delete_rows(
+    at: usize,
+    count: usize,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<DeleteResultDto, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let num_rows = ds.alignment.num_rows();
+    let at = at.min(num_rows);
+    let count = count.min(num_rows - at);
+    history
+        .apply(ds, EditCmd::DeleteRows { at, count })
+        .map_err(|e| e.to_string())?;
+    Ok(DeleteResultDto {
+        num_rows: ds.alignment.num_rows(),
+        width: ds.alignment.width,
+    })
+}
+
+/// Delete columns `c0..=c1` from every row — a width-SHRINKING structural column
+/// delete (see [`delete_columns_splices`]; not the width-preserving `cut_shorten`).
+/// Reversible through the edit history (the inverse re-inserts the removed columns).
+/// `c1` is clamped to the last column; deleting every column is allowed and leaves
+/// width 0. Returns the post-delete dimensions; the frontend re-syncs its view (a
+/// width change reuses the load path, robust to the width-0 edge). Errors if
+/// nothing is loaded.
+#[tauri::command]
+pub async fn delete_columns(
+    c0: usize,
+    c1: usize,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<DeleteResultDto, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let splices = delete_columns_splices(ds, c0, c1);
+    history
+        .apply(ds, EditCmd::SpliceRows { splices })
+        .map_err(|e| e.to_string())?;
+    Ok(DeleteResultDto {
+        num_rows: ds.alignment.num_rows(),
+        width: ds.alignment.width,
+    })
+}
+
 /// Undo the most recent edit; returns the post-edit render buffer (empty when
 /// there is nothing to undo). Errors if nothing is loaded.
 #[tauri::command]
@@ -1100,5 +1203,131 @@ mod tests {
         let (cmd, truncated) = paste_sequences_cmd(&ds, 1, &[]);
         assert_eq!(truncated, 0);
         assert!(matches!(cmd, EditCmd::InsertRows { rows, .. } if rows.is_empty()));
+    }
+
+    // ---- structural delete (delete_rows / delete_columns) ------------------
+
+    #[test]
+    fn delete_columns_splices_remove_w_at_c0_for_every_row() {
+        // One splice per row, each removing W = c1-c0+1 cells at c0 (no bytes), so
+        // every row shrinks equally and the result stays single-width.
+        let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        assert_eq!(
+            delete_columns_splices(&ds, 1, 2),
+            vec![
+                RowSplice {
+                    row: 0,
+                    col: 1,
+                    remove: 2,
+                    bytes: Vec::new()
+                },
+                RowSplice {
+                    row: 1,
+                    col: 1,
+                    remove: 2,
+                    bytes: Vec::new()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn delete_columns_through_history_shrinks_width_and_undo_restores() {
+        // The path the `delete_columns` command runs, minus the Tauri State plumbing.
+        // Delete cols 1..=2 from a width-4, 2-row alignment → width 2; undo restores
+        // both the width and the exact bytes (the inverse re-inserts the columns).
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let splices = delete_columns_splices(&ds, 1, 2);
+        let changed = history
+            .apply(&mut ds, EditCmd::SpliceRows { splices })
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(ds.alignment.width, 2);
+        // Row 0: "ACGT" minus cols 1,2 = "AT"; row 1: "TTTT" → "TT".
+        assert_eq!(flatten_buffer(&ds), b"ATTT");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn delete_all_columns_leaves_width_zero_and_undo_restores() {
+        // The delete-every-column edge: removing cols 0..=width-1 from every row
+        // leaves a legal empty (width-0) alignment with the row COUNT intact. The
+        // render buffer is empty, but it is a real edit (not a no-op), so the
+        // frontend must resync from dimensions — hence `delete_columns` returns a
+        // DTO, not the empty-bytes-is-no-op transport. Undo restores everything.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let splices = delete_columns_splices(&ds, 0, 3);
+        assert_eq!(splices.len(), 2); // one per row
+        let changed = history
+            .apply(&mut ds, EditCmd::SpliceRows { splices })
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(ds.alignment.width, 0);
+        assert_eq!(ds.alignment.num_rows(), 2); // rows survive, just empty
+        assert!(flatten_buffer(&ds).is_empty());
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn delete_columns_splices_clamp_and_noop_edges() {
+        let ds = Dataset::from_records(&[rec("a", "ACGT")]);
+        // c1 past the right edge clamps to the last column (delete cols 2..=3).
+        assert_eq!(
+            delete_columns_splices(&ds, 2, 99),
+            vec![RowSplice {
+                row: 0,
+                col: 2,
+                remove: 2,
+                bytes: Vec::new()
+            }]
+        );
+        // c0 past the right edge ⇒ no splices (graceful no-op).
+        assert!(delete_columns_splices(&ds, 9, 9).is_empty());
+        // No rows ⇒ no splices.
+        let empty = Dataset::default();
+        assert!(delete_columns_splices(&empty, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn delete_rows_through_history_drops_sequences_and_undo_restores() {
+        // The path the `delete_rows` command runs: DeleteRows through the history
+        // removes the sequences (names included); undo re-inserts them verbatim.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT"), rec("c", "GGGG")]);
+        let mut history = align_core::EditStack::new();
+        let changed = history
+            .apply(&mut ds, EditCmd::DeleteRows { at: 0, count: 2 })
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(ds.alignment.num_rows(), 1);
+        assert_eq!(ds.sequences[0].name, "c");
+        assert_eq!(flatten_buffer(&ds), b"GGGG");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 3);
+        assert_eq!(ds.sequences[0].name, "a");
+        assert_eq!(ds.sequences[1].name, "b");
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTTGGGG");
+    }
+
+    #[test]
+    fn delete_all_rows_leaves_empty_alignment() {
+        // The delete-every-row edge: 0 rows is a legal empty state (undoable). The
+        // surviving width is irrelevant (no rows render); the frontend keys its
+        // empty branch off num_rows == 0.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        history
+            .apply(&mut ds, EditCmd::DeleteRows { at: 0, count: 2 })
+            .unwrap();
+        assert_eq!(ds.alignment.num_rows(), 0);
+        assert!(flatten_buffer(&ds).is_empty());
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 2);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
     }
 }
