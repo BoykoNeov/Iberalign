@@ -177,9 +177,10 @@ pub async fn get_render_buffer(
 // width, so the frontend copies the bytes into its existing render buffer in
 // place (no realloc, no new view ⇒ scroll + selection are preserved). An empty
 // response means the edit was a no-op (e.g. undo at the bottom of the stack), and
-// the frontend skips the repaint. Width-changing commands (paste insert / cut
-// shorten) extend this transport later: they return the full new buffer too, but
-// the frontend rebuilds the view because the length changes.
+// the frontend skips the repaint. Width-changing commands (paste insert) return
+// the full new buffer over the same transport, but the frontend derives the new
+// width from its length and resizes the view. (Cut-shorten is width-PRESERVING —
+// it trailing-pads each cut row back to width — so it rides the in-place path.)
 
 /// Per-row gap-fill writes covering the rectangle rows `r0..=r1`, cols `c0..=c1`.
 /// The engine command behind delete/clear-to-gap (mask).
@@ -190,6 +191,48 @@ fn gap_fill_writes(r0: usize, r1: usize, c0: usize, c1: usize) -> Vec<CellWrite>
             row,
             col: c0,
             bytes: vec![b'-'; count],
+        })
+        .collect()
+}
+
+/// Per-row writes for a CUT-SHORTEN over the rectangle rows `r0..=r1`, cols
+/// `c0..=c1`: each target row deletes the `W = c1-c0+1` selected columns and
+/// shifts its remaining tail left, trailing-padding `W` gaps so the row keeps the
+/// alignment width (the alignment's overall width is preserved — only the cut
+/// rows' content shifts; untouched rows are left byte-for-byte alone). Because the
+/// net length change is zero, this is a plain width-preserving [`EditCmd::SetCells`]
+/// overwrite of each row's tail `[c0..width]` — the captured old bytes give the
+/// re-insert inverse for free (no `SpliceRows`/width recompute needed).
+///
+/// Unlike [`gap_fill_writes`], this reads each row's bytes, so a stale/out-of-range
+/// row index would *panic* rather than error cleanly: `r1` is clamped to the last
+/// row and an `r0` past the end yields no writes (a graceful no-op). The column
+/// range is safe by the selection-clamp invariant (`c1 < width`), asserted in debug.
+fn cut_shorten_writes(ds: &Dataset, r0: usize, r1: usize, c0: usize, c1: usize) -> Vec<CellWrite> {
+    let num_rows = ds.alignment.num_rows();
+    if num_rows == 0 || r0 >= num_rows {
+        return Vec::new();
+    }
+    let width = ds.alignment.width;
+    debug_assert!(
+        c1 < width,
+        "cut column c1 must be within the alignment width"
+    );
+    let w = c1.saturating_sub(c0) + 1;
+    let r1 = r1.min(num_rows - 1);
+    (r0..=r1)
+        .map(|row| {
+            let old = &ds.alignment.rows[row].gapped;
+            // The new tail covering [c0..width]: the cells after the cut shifted to
+            // the front, the freed W cells at the end filled with gaps.
+            let mut tail = vec![b'-'; width - c0];
+            let keep = &old[(c0 + w).min(width)..width];
+            tail[..keep.len()].copy_from_slice(keep);
+            CellWrite {
+                row,
+                col: c0,
+                bytes: tail,
+            }
         })
         .collect()
 }
@@ -355,6 +398,37 @@ pub async fn clear_cells(
         .as_mut()
         .ok_or_else(|| "no alignment loaded".to_string())?;
     let writes = gap_fill_writes(r0, r1, c0, c1);
+    let changed = history
+        .apply(ds, EditCmd::SetCells { writes })
+        .map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(edit_bytes(ds, &changed)))
+}
+
+/// Cut the selected rectangle in SHORTEN mode: delete the selected columns in the
+/// selected rows and shift each row's remaining tail left, trailing-padding gaps so
+/// the alignment keeps its width (see [`cut_shorten_writes`]). This command is only
+/// the REMOVAL — the frontend writes the block to the system clipboard first (cut =
+/// copy + remove). Width-preserving, so it returns the post-edit render buffer the
+/// frontend copies into its view in place (empty ⇒ no-op). Reversible through the
+/// edit history (the inverse re-inserts the cut columns). The rect is in alignment
+/// coordinates (the frontend normalizes the selection first). Errors if nothing is
+/// loaded; the edit is atomic — state is untouched on error.
+#[tauri::command]
+pub async fn cut_shorten(
+    r0: usize,
+    c0: usize,
+    r1: usize,
+    c1: usize,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<tauri::ipc::Response, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let writes = cut_shorten_writes(ds, r0, r1, c0, c1);
     let changed = history
         .apply(ds, EditCmd::SetCells { writes })
         .map_err(|e| e.to_string())?;
@@ -688,6 +762,87 @@ mod tests {
 
         history.undo(&mut ds).unwrap();
         assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn cut_shorten_shifts_tail_left_and_leaves_other_rows_untouched() {
+        // Cut cols 1..=2 from rows 0..=1 of a 3-row alignment: those rows delete the
+        // 2 selected cols and shift their tail left (W=2 trailing gaps); row 2 is
+        // untouched. Each write overwrites the row's tail [c0..width] in place.
+        let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT"), rec("c", "GGGG")]);
+        let writes = cut_shorten_writes(&ds, 0, 1, 1, 2);
+        assert_eq!(
+            writes,
+            vec![
+                CellWrite {
+                    row: 0,
+                    col: 1,
+                    bytes: b"T--".to_vec()
+                },
+                CellWrite {
+                    row: 1,
+                    col: 1,
+                    bytes: b"T--".to_vec()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn cut_shorten_through_history_preserves_width_and_undo_restores() {
+        // The path the `cut_shorten` command runs, minus the Tauri State plumbing.
+        // Width is PRESERVED (the cut rows trailing-pad back to width); undo
+        // re-inserts the cut columns exactly.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT"), rec("c", "GGGG")]);
+        let mut history = align_core::EditStack::new();
+        let writes = cut_shorten_writes(&ds, 0, 1, 1, 2);
+        let changed = history
+            .apply(&mut ds, align_core::EditCmd::SetCells { writes })
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(ds.alignment.width, 4); // preserved
+        assert_eq!(flatten_buffer(&ds), b"AT--TT--GGGG");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTTGGGG");
+    }
+
+    #[test]
+    fn cut_shorten_single_cell_and_right_edge() {
+        let ds = Dataset::from_records(&[rec("a", "ACGT")]);
+        // Single cell at col 1: delete "C", shift "GT" left, 1 trailing gap.
+        assert_eq!(
+            cut_shorten_writes(&ds, 0, 0, 1, 1),
+            vec![CellWrite {
+                row: 0,
+                col: 1,
+                bytes: b"GT-".to_vec()
+            }]
+        );
+        // At the right edge (c1 == width-1): empty `keep`, the tail is pure gaps.
+        assert_eq!(
+            cut_shorten_writes(&ds, 0, 0, 2, 3),
+            vec![CellWrite {
+                row: 0,
+                col: 2,
+                bytes: b"--".to_vec()
+            }]
+        );
+    }
+
+    #[test]
+    fn cut_shorten_clamps_stale_row_range() {
+        // r1 past the last row must not panic the direct row index — it clamps.
+        let ds = Dataset::from_records(&[rec("a", "ACGT")]);
+        assert_eq!(
+            cut_shorten_writes(&ds, 0, 99, 0, 0),
+            vec![CellWrite {
+                row: 0,
+                col: 0,
+                bytes: b"CGT-".to_vec()
+            }]
+        );
+        // r0 past the end ⇒ no writes (graceful no-op, no panic).
+        assert!(cut_shorten_writes(&ds, 5, 9, 0, 0).is_empty());
     }
 
     #[test]

@@ -230,6 +230,45 @@ alphabet-mismatch warning; the within-insert shift-all toggle (C3).
   `pasteFasta` captures `prevWidth` and adds an `"alignment widened to W"` info note when grow
   widened the alignment (mutually exclusive with the truncated note).
 
+## Batch D (cut) — files
+
+Cut = COPY then REMOVE. Two modes via one toggle (default **shorten**). The only new
+backend is `cut_shorten`; cut-mask reuses `clear_cells`. No new engine primitive
+(cut-shorten is a width-preserving `SetCells`), no new capability.
+
+**Command (`src-tauri`)**
+- `commands.rs` — `cut_shorten_writes(ds, r0, r1, c0, c1)` (sibling of `gap_fill_writes`):
+  per cut row, overwrite the tail `[c0..width]` with the post-cut cells shifted to the
+  front + `W = c1-c0+1` trailing gaps — a width-PRESERVING `SetCells`, so width is
+  unchanged and the inverse (captured old tail) re-inserts the cut columns. Unlike
+  `gap_fill_writes` it READS each row's bytes, so it **clamps `r1` to the last row** and
+  returns no writes for `r0 >= num_rows` (a stale index would panic the direct access);
+  `debug_assert!(c1 < width)` for the column invariant. `cut_shorten` command (mirrors
+  `clear_cells`: split-borrow, `EditCmd::SetCells`, `edit_bytes`). `lib.rs` registers it.
+  +4 tests. The editing-block header comment updated (cut-shorten is width-PRESERVING, not
+  width-changing as the C-era note assumed).
+
+**Frontend**
+- `ipc/edit.ts` — `cutShorten(rect)` over the post-edit-buffer transport (width-preserving,
+  copied in place like `clearCells`).
+- `ui/Grid.tsx` — `cutMode` state + `cutModeRef` (default `"shorten"`); **`writeClipboard(rect,
+  dims)`** extracted from `doCopy` (build text + `COPY_CELL_CAP` guard + clipboard write →
+  boolean; reads view/format via refs) and reused by both — `doCopy` now calls it; effect-
+  scoped **`doCut`** (no-selection guard with cut wording; copy FIRST, abort the removal if
+  the copy didn't reach the clipboard; `runEdit(cutShorten | clearCells)` by mode; neutral
+  `Cut C × R (shortened|masked)` message) exposed via `doCutRef`; `handleCut` /
+  `handleSetCutMode`; `Ctrl/⌘+X` in `onKeyDown` (after Ctrl+V). Toolbar gains `cutMode`/
+  `onSetCutMode`/`onCut` props.
+- `ui/Toolbar.tsx` — `CutMode` type (`"shorten" | "mask"`); a `Cut` button (disabled when no
+  selection) + a `Shorten | Mask` segmented toggle. (No new CSS — reuses `.toolbar-btn` /
+  `.toolbar-toggle`.)
+
+**Why `SetCells`, not `SpliceRows` (decision):** the plan named `DeleteBlock`/`SpliceRows`,
+but trailing-padding the cut rows back to width makes each row's net length change zero ⇒ a
+width-preserving overwrite is the honest, simpler primitive (advisor-confirmed). **Cut cap:**
+cut is `COPY_CELL_CAP`-capped even in mask mode (it must reach the clipboard); plain Delete is
+the uncapped masking escape hatch.
+
 ## Seams for Batches C–D (paste/cut, building on the B foundation)
 
 - `crates/align-core/src/edit.rs` — `EditCmd` enum (variants: InsertGap, DeleteGap,

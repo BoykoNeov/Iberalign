@@ -21,6 +21,17 @@ export function clearCells(rect: CellRect): Promise<Uint8Array> {
 }
 
 /**
+ * Cut the selected rectangle in SHORTEN mode: delete the selected columns in the
+ * selected rows and shift each row's tail left, trailing-padding gaps so the
+ * alignment keeps its width. The REMOVAL half of a cut — the caller copies the
+ * block to the clipboard first. Width-preserving, so the returned buffer matches
+ * the current dimensions and the caller copies it in place (empty ⇒ no-op).
+ */
+export function cutShorten(rect: CellRect): Promise<Uint8Array> {
+  return editBuffer("cut_shorten", { r0: rect.r0, c0: rect.c0, r1: rect.r1, c1: rect.c1 });
+}
+
+/**
  * Paste a block of residue lines over the alignment in OVERWRITE mode, with the
  * block's top-left at `(r0, c0)`: cells are overwritten in place, lines past the
  * last row are dropped, and the alignment GROWS to fit a block that runs past the

@@ -224,8 +224,28 @@ dependency-light and surface toolchain/linker issues fast.
   when a huge sequence × a tall alignment would OOM (the only remaining `truncated > 0` case);
   `pasteFasta` adds an "alignment widened to W" info note. align-core 28 / iberalign 18 / 172
   vitest; clippy + fmt clean. Advisor-reviewed (post-commit): closed the raw-block output-cap gap
-  + added an interior-row (`at < num_rows`) grow undo/redo test. **Remaining:** Batch D = Cut
-  (default = shorten). Detail in
+  + added an interior-row (`at < num_rows`) grow undo/redo test. Detail in
+  `docs/plans/copy-paste-{plan,context,tasks}.md`.
+- **Cut (Batch D) — code complete + green; GUI smoke pending.** The last copy/paste/cut piece:
+  **cut = COPY then REMOVE**, two modes via one toolbar toggle (default **shorten**, user-decided;
+  mask is the toggle). Built D1+D2+D3 together. **Cut-shorten** deletes the selected columns in
+  the selected rows and shifts each cut row's tail left, trailing-padding `W` gaps back to width —
+  so **the alignment KEEPS its overall width** (it does not narrow; it adds trailing-gap columns to
+  the cut rows). **Deviation from the plan's `DeleteBlock`/`SpliceRows` (advisor-greenlit):** because
+  the cut rows pad back to width the per-row net length change is ZERO, so it is a width-PRESERVING
+  **`SetCells`** (the most-tested primitive, fast in-place transport, no `WidthMismatch` path); the
+  captured old tail bytes give the re-insert inverse for free. New `commands.rs::cut_shorten_writes`
+  (sibling of `gap_fill_writes`, but it **reads** each row's bytes to build the shifted tail, so it
+  **clamps `r1` to the last row** + bails on `r0 >= num_rows` — a stale index would otherwise *panic*
+  the direct row access; advisor) + `cut_shorten` command + `lib.rs` registration. **Cut-mask** ==
+  copy + the existing `clear_cells` (no new backend). Frontend: a shared **`writeClipboard(rect, dims)`**
+  extracted from `doCopy` (text + `COPY_CELL_CAP` guard + clipboard write → boolean) reused by Copy and
+  Cut; effect-scoped `doCut` (copy FIRST, and **only remove if the copy reached the clipboard** — else a
+  cut would silently lose data; then `runEdit(cutShorten | clearCells)`); `Ctrl/⌘+X`; Toolbar `Cut`
+  button + `Shorten|Mask` toggle (`CutMode` type). **Cut is `COPY_CELL_CAP`-capped even in mask mode**
+  (it must reach the clipboard); plain **Delete stays the uncapped masking escape hatch**. No new
+  capability (clipboard WRITE already granted; custom commands aren't capability-gated; cut writes, so
+  no READ perm). align-core 28 / iberalign 22 (+4) / 172 vitest; clippy + fmt clean. Detail in
   `docs/plans/copy-paste-{plan,context,tasks}.md`.
 
 ## Dev-docs

@@ -92,10 +92,18 @@ tasks.md` "B2 smoke fixes".
 - **C4** Polish: FASTA auto-detect, alphabet-validation warning, size-guard,
   multi-row fill-down geometry, the Insert|Overwrite + shift-mode toggle buttons.
 
-**Batch D — Cut**
-- **D1** Cut → mask-to-gaps (cut = copy + `SetCells`-to-`-`).
-- **D2** Cut → shorten (`DeleteBlock` cmd).
-- **D3** Cut toggle button.
+**Batch D — Cut (DONE, green; GUI smoke pending).** Built D1+D2+D3 together (one Cut
+button + a Shorten|Mask toggle, default shorten). Cut = copy THEN remove.
+- **D1** Cut → mask-to-gaps = copy + the existing `clear_cells` (no new backend).
+- **D2** Cut → shorten — delete the selected cols in the cut rows, shift each tail left,
+  trailing-pad back to width. **Implemented as `SetCells`, not the planned `DeleteBlock`/
+  `SpliceRows`:** trailing-padding back to width makes the net length change zero, so it is
+  width-PRESERVING — the honest, simpler primitive (advisor-confirmed). New
+  `cut_shorten_writes` helper + `cut_shorten` command (`r1` clamped before the direct row
+  read — would otherwise panic).
+- **D3** `Cut` button + `Shorten|Mask` toggle in the Toolbar; `Ctrl/⌘+X`. Cut is capped at
+  `COPY_CELL_CAP` even in mask mode (it must reach the clipboard); plain Delete stays the
+  uncapped masking escape hatch.
 
 ## Deferred (settle when designing paste)
 

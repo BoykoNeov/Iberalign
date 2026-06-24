@@ -1,20 +1,25 @@
 // The grid toolbar: selection-scoped actions pinned above the grid. It holds the
 // copy controls — the `Sel: C × R` readout, the Copy button, the Raw|FASTA copy-
-// format toggle — and the paste controls — the Paste button, an Insert|Overwrite
-// mode toggle, and (for Insert) a shift-scope toggle: shift the Pasted rows only
-// vs All rows — plus an ephemeral status message ("Copied …" / "Inserted …" / a
-// warning). It is where the cut controls will join (Batch D).
+// format toggle — the paste controls — the Paste button, an Insert|Overwrite mode
+// toggle, and (for Insert) a shift-scope toggle: shift the Pasted rows only vs All
+// rows — and the cut controls — the Cut button and a Shorten|Mask mode toggle —
+// plus an ephemeral status message ("Copied …" / "Inserted …" / "Cut …" / a
+// warning).
 //
 // Presentational: all state (the selection mirror, the chosen format/mode, the
 // message) lives in `Grid`; this renders props and calls handlers. It re-renders
-// only on coarse events (a selection-rect change, a toggle, a copy/paste), never
-// per frame — the canvas keeps drawing on its own rAF loop.
+// only on coarse events (a selection-rect change, a toggle, a copy/paste/cut),
+// never per frame — the canvas keeps drawing on its own rAF loop.
 
 import type { CopyFormat } from "../model/copy";
 import "./Toolbar.css";
 
 /** Raw block paste mode: insert (shift columns right) or overwrite cells in place. */
 export type PasteMode = "insert" | "overwrite";
+
+/** Cut mode: shorten (delete columns + shift the cut rows left) or mask (clear to
+ *  gaps). Default shorten. */
+export type CutMode = "shorten" | "mask";
 
 interface ToolbarProps {
   /** The selection size for the readout, or `null` when nothing is selected. */
@@ -29,10 +34,16 @@ interface ToolbarProps {
    *  (default) shifts only the pasted rows. Only applies in Insert mode. */
   shiftAll: boolean;
   onSetShiftAll: (v: boolean) => void;
+  /** The active cut mode (the Shorten|Mask toggle). */
+  cutMode: CutMode;
+  onSetCutMode: (mode: CutMode) => void;
   /** Copy the current selection (a no-op upstream when nothing is selected). */
   onCopy: () => void;
   /** Paste the clipboard (FASTA ⇒ new sequences; else a block in the paste mode). */
   onPaste: () => void;
+  /** Cut the current selection to the clipboard (no-op upstream when nothing is
+   *  selected) — copy then remove, in the cut mode. */
+  onCut: () => void;
   /** Ephemeral feedback with a tone (`warn` ⇒ bold red, lingers), or `null`. */
   message: { text: string; tone: "info" | "warn" } | null;
 }
@@ -45,8 +56,11 @@ export default function Toolbar({
   onSetPasteMode,
   shiftAll,
   onSetShiftAll,
+  cutMode,
+  onSetCutMode,
   onCopy,
   onPaste,
+  onCut,
   message,
 }: ToolbarProps) {
   const hasSel = selInfo !== null;
@@ -147,6 +161,37 @@ export default function Toolbar({
           title="Insert gaps in every row so the columns stay aligned (Insert only)"
         >
           All
+        </button>
+      </span>
+
+      <button
+        type="button"
+        className="toolbar-btn"
+        onClick={onCut}
+        disabled={!hasSel}
+        title="Cut the selection to the clipboard (Ctrl/⌘+X) — copy, then remove in the mode at right"
+      >
+        Cut
+      </button>
+
+      <span className="toolbar-toggle" role="group" aria-label="Cut mode">
+        <button
+          type="button"
+          className={cutMode === "shorten" ? "toggle-on" : ""}
+          aria-pressed={cutMode === "shorten"}
+          onClick={() => onSetCutMode("shorten")}
+          title="Shorten — delete the selected columns and shift the cut rows left (the alignment keeps its width)"
+        >
+          Shorten
+        </button>
+        <button
+          type="button"
+          className={cutMode === "mask" ? "toggle-on" : ""}
+          aria-pressed={cutMode === "mask"}
+          onClick={() => onSetCutMode("mask")}
+          title="Mask — clear the selected cells to gaps (like Delete, but the cells are copied first)"
+        >
+          Mask
         </button>
       </span>
 

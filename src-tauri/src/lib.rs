@@ -19,6 +19,7 @@ pub fn run() {
             commands::get_alignment_meta,
             commands::get_render_buffer,
             commands::clear_cells,
+            commands::cut_shorten,
             commands::paste_overwrite,
             commands::paste_insert,
             commands::paste_sequences,

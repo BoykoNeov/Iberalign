@@ -206,12 +206,59 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       effect also clears it on file-open so a prior file's message can't linger. Verify:
       typecheck ✓, 166 vitest ✓, build ✓.
 
-## Batch D — Cut
+## Batch D — Cut ✅ (code complete + green; GUI smoke pending)
 
-- [ ] **D1** Cut → mask-to-gaps.
-- [ ] **D2** Cut → shorten (`DeleteBlock`).
-- [ ] **D3** Cut toggle button. **Default = shorten** (user-decided 2026-06-23);
-      mask-to-gaps is the toggle.
+Built D1+D2+D3 together (one Cut button + one toggle). **Cut = copy THEN remove.**
+Advisor-reviewed before building (greenlit the `SpliceRows` → `SetCells` deviation
+below + the `r1`-clamp fix).
+
+- [x] **D2 (default) Cut → shorten** — delete the selected columns in the selected
+      rows and shift each cut row's tail left, trailing-padding `W` gaps so the row
+      keeps the alignment width. **Deviation from the plan's `DeleteBlock`/`SpliceRows`:**
+      because the cut rows trailing-pad back to width, the net length change is ZERO, so
+      this is a plain width-PRESERVING **`SetCells`** (the most-tested primitive; rides
+      the fast in-place transport; no `WidthMismatch` path). The captured old tail bytes
+      give the re-insert inverse for free. New `commands.rs::cut_shorten_writes` (sibling
+      of `gap_fill_writes`, but it **reads** each row's bytes to build the shifted tail —
+      so it **clamps `r1` to the last row** and bails on `r0 >= num_rows`; a stale index
+      would otherwise *panic* the direct row access — advisor) + `cut_shorten` command +
+      `lib.rs` registration. **The alignment keeps its overall width** (it does not narrow
+      — it adds `W` trailing-gap columns to the cut rows); documented user decision —
+      a GUI-smoke observation point, message stays neutral (`Cut C × R (shortened)`).
+- [x] **D1 (toggle) Cut → mask** — clear the selected cells to gaps. No new backend:
+      cut-mask == **copy + `clearCells`** (the existing Delete command). Message
+      `Cut C × R (masked)`.
+- [x] **D3 Cut toggle + button.** Toolbar `Cut` button (disabled when no selection) +
+      a `Shorten | Mask` segmented toggle (`CutMode` type; default **shorten**).
+      `Ctrl/⌘+X` mirrors the button.
+- [x] Frontend wiring (`Grid.tsx`): `cutMode` state + `cutModeRef`; a shared
+      **`writeClipboard(rect, dims)`** extracted from `doCopy` (build text + cap-guard +
+      clipboard write → boolean) reused by Copy and Cut; effect-scoped `doCut` (copy
+      FIRST via `writeClipboard`, and **only remove if the copy reached the clipboard** —
+      else a cut would silently lose data; then `runEdit(cutShorten | clearCells)`),
+      exposed via `doCutRef`; `handleCut` / `handleSetCutMode`. `ipc/edit.ts::cutShorten`.
+- [x] **Cut is capped at `COPY_CELL_CAP`** even in mask mode (cut must reach the
+      clipboard). Plain **Delete stays the uncapped masking escape hatch** — kept distinct
+      in the refused-cut message ("Selection too large to copy …").
+- [x] No new capability (clipboard WRITE already granted for copy; custom app commands
+      aren't capability-gated). No new clipboard READ perm (cut writes, doesn't read).
+- [x] Tests — engine helper in `commands.rs` (no new align-core primitive): shift-left +
+      neighbors-untouched, through-history width-preserved + undo round-trip, single-cell,
+      right-edge (empty `keep` ⇒ pure trailing gaps), stale-`r1` clamp + `r0`-past-end
+      no-op. align-core 28 / **iberalign 22 (+4)** / 172 vitest; clippy (iberalign) + fmt
+      clean; typecheck + build ✓.
+- [ ] **GUI smoke (human):** select a rect → Cut (Shorten) → cells shift left, trailing
+      gaps appear, width unchanged, block on the clipboard (paste elsewhere to confirm) →
+      Ctrl+Z restores. Toggle to Mask → Cut clears to gaps (+ clipboard). `Ctrl/⌘+X`
+      mirrors the button. Verify a `warn` message (e.g. cut with no selection) stays
+      visible at a normal window width (toolbar is now full — advisor flag #4).
+
+## Resolved (Batch D)
+
+- **`SetCells` over `SpliceRows` for cut-shorten** (advisor 2026-06-24). Trailing-padding
+  the cut rows back to width makes the per-row length change zero, so the honest primitive
+  is the width-preserving overwrite, not a width-changing splice. Simpler, faster transport,
+  no width-recompute path.
 
 ## Resolved
 

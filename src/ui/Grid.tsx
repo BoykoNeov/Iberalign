@@ -38,7 +38,7 @@ import { NAME_W, RULER_H } from "../render/chrome";
 import { computeHover, cellAtPixel, type HoverInfo } from "./hover";
 import StatusBar from "./StatusBar";
 import Toolbar from "./Toolbar";
-import { normalize, rectDims } from "../state/selection";
+import { normalize, rectDims, type CellRect } from "../state/selection";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
 import {
   looksLikeFasta,
@@ -48,9 +48,17 @@ import {
   PASTE_RESULT_CELL_CAP,
 } from "../model/paste";
 import { copyText, readClipboardText } from "../ipc/clipboard";
-import { clearCells, pasteInsert, pasteOverwrite, pasteSequences, undoEdit, redoEdit } from "../ipc/edit";
+import {
+  clearCells,
+  cutShorten,
+  pasteInsert,
+  pasteOverwrite,
+  pasteSequences,
+  undoEdit,
+  redoEdit,
+} from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
-import type { PasteMode } from "./Toolbar";
+import type { PasteMode, CutMode } from "./Toolbar";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -153,6 +161,13 @@ export default function Grid({ view, onResized }: GridProps) {
   // once-bound paste path, same as `pasteMode`.
   const [shiftAll, setShiftAll] = useState(false);
   const shiftAllRef = useRef(false);
+  // Cut mode (Shorten | Mask), default Shorten (user-decided 2026-06-23). Shorten
+  // deletes the selected columns and shifts each cut row's tail left (the alignment
+  // keeps its width — it does not narrow); Mask just clears the cells to gaps (==
+  // copy + Delete). The ref shadows it for the effect-scoped `doCut` + the once-
+  // bound Ctrl/⌘+X path, same as `pasteMode`.
+  const [cutMode, setCutMode] = useState<CutMode>("shorten");
+  const cutModeRef = useRef<CutMode>("shorten");
   // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
   // red, `info` (copied / inserted) is plain. The message PERSISTS — it does not
   // time out; it clears when the user takes their next action (see the effect below)
@@ -163,6 +178,9 @@ export default function Grid({ view, onResized }: GridProps) {
   // effect-scoped `runEdit`/`store`), so the toolbar button reaches it through
   // this ref, set once on mount — same latest-callback idiom as `doCopyRef`.
   const doPasteRef = useRef<() => void>(() => {});
+  // Cut bridge: like `doPaste`, `doCut` is effect-scoped (it needs `runEdit`), so
+  // the toolbar Cut button + Ctrl/⌘+X reach it through this ref.
+  const doCutRef = useRef<() => void>(() => {});
 
   // Guards against overlapping edits: a held Ctrl+Z would otherwise fire
   // concurrent undo() invokes whose completion order Tauri doesn't guarantee.
@@ -201,32 +219,52 @@ export default function Grid({ view, onResized }: GridProps) {
     };
   }, [copyMsg]);
 
+  // Build the copy text for `rect` and write it to the clipboard in the current
+  // format. Returns `true` on success; on failure shows a warning and returns
+  // `false` — over COPY_CELL_CAP (guards the select-all-on-the-stress-fixture case
+  // rather than freezing on a ~100M-char build) or the clipboard write rejecting.
+  // Shared by Copy and Cut (cut = copy + remove); reads view/format via refs, so
+  // the once-bound handlers below can call it without re-binding. The no-selection
+  // case is the caller's to message (Copy vs Cut wording differs).
+  const writeClipboard = useCallback(
+    async (rect: CellRect, dims: { rows: number; cols: number }): Promise<boolean> => {
+      const view = viewRef.current;
+      if (!view) return false;
+      if (dims.rows * dims.cols > COPY_CELL_CAP) {
+        showMsg(
+          `Selection too large to copy (${dims.rows * dims.cols} cells; limit ${COPY_CELL_CAP})`,
+          "warn",
+        );
+        return false;
+      }
+      try {
+        await copyText(buildCopyText(view, rect, copyFormatRef.current));
+        return true;
+      } catch (e) {
+        showMsg(`Copy failed: ${String(e)}`, "warn");
+        return false;
+      }
+    },
+    [showMsg],
+  );
+
   // Copy the selected block to the clipboard in the current format. Stable (reads
   // store/view/format via refs), so the keydown handler bound once below can call
-  // it through `doCopyRef`. Guards the select-all-on-the-stress-fixture case
-  // (COPY_CELL_CAP) rather than freezing on a ~100M-char build.
+  // it through `doCopyRef`.
   const doCopy = useCallback(async () => {
     const store = storeRef.current;
-    const view = viewRef.current;
-    if (!store || !view) return;
+    if (!store) return;
     const sel = store.getSelection();
     if (!sel) {
       showMsg("Select cells first, then copy", "warn");
       return;
     }
     const rect = normalize(sel);
-    const { rows, cols } = rectDims(rect);
-    if (rows * cols > COPY_CELL_CAP) {
-      showMsg(`Selection too large to copy (${rows * cols} cells; limit ${COPY_CELL_CAP})`, "warn");
-      return;
+    const dims = rectDims(rect);
+    if (await writeClipboard(rect, dims)) {
+      showMsg(`Copied ${dims.cols} × ${dims.rows} (${copyFormatRef.current === "fasta" ? "FASTA" : "raw"})`);
     }
-    try {
-      await copyText(buildCopyText(view, rect, copyFormatRef.current));
-      showMsg(`Copied ${cols} × ${rows} (${copyFormatRef.current === "fasta" ? "FASTA" : "raw"})`);
-    } catch (e) {
-      showMsg(`Copy failed: ${String(e)}`, "warn");
-    }
-  }, [showMsg]);
+  }, [writeClipboard, showMsg]);
   doCopyRef.current = doCopy;
 
   // Toggle the copy format from the toolbar; mirror into the ref the keydown reads.
@@ -251,6 +289,16 @@ export default function Grid({ view, onResized }: GridProps) {
 
   // Toolbar Paste button → the effect-scoped paste flow (via the ref above).
   const handlePaste = useCallback(() => doPasteRef.current(), []);
+
+  // Toggle the cut mode (Shorten | Mask) from the toolbar; mirror into the ref the
+  // effect-scoped `doCut` + the once-bound Ctrl/⌘+X read.
+  const handleSetCutMode = useCallback((mode: CutMode) => {
+    cutModeRef.current = mode;
+    setCutMode(mode);
+  }, []);
+
+  // Toolbar Cut button → the effect-scoped cut flow (via the ref above).
+  const handleCut = useCallback(() => doCutRef.current(), []);
 
   // Mount once: build store/renderer/loop, attach input, start drawing. Has no
   // `view` dependency — the view-change effect below feeds dims; this keeps a new
@@ -698,6 +746,33 @@ export default function Grid({ view, onResized }: GridProps) {
     };
     doPasteRef.current = doPaste;
 
+    // Cut entry point (Ctrl/⌘+X + the toolbar button). Cut = COPY then REMOVE, in
+    // the current cut mode:
+    //   - Shorten (default): delete the selected columns in the selected rows and
+    //     shift each row's tail left (the alignment keeps its width).
+    //   - Mask: clear the selected cells to gaps (== copy + Delete).
+    // The block is copied to the clipboard FIRST; if that can't be written (over
+    // COPY_CELL_CAP / denied), the removal is skipped — a cut that didn't reach the
+    // clipboard would silently lose data (plain Delete is the uncapped masking
+    // escape hatch). Serialized via `editingRef` inside `runEdit`.
+    const doCut = async () => {
+      const v = viewRef.current;
+      if (!v) return;
+      const sel = store.getSelection();
+      if (!sel) {
+        showMsg("Select cells first, then cut", "warn");
+        return;
+      }
+      const rect = normalize(sel);
+      const dims = rectDims(rect);
+      if (!(await writeClipboard(rect, dims))) return;
+      const shorten = cutModeRef.current === "shorten";
+      const ok = await runEdit(() => (shorten ? cutShorten(rect) : clearCells(rect)));
+      if (!ok) return;
+      showMsg(`Cut ${dims.cols} × ${dims.rows} (${shorten ? "shortened" : "masked"})`);
+    };
+    doCutRef.current = doCut;
+
     // Keyboard cursor movement (cell is focusable). Arrows move the cursor (the
     // M2 arrow-PAN is gone — see selection-plan.md); Shift+arrows extend the
     // rectangle; Page moves a page of rows; Home/End jump to the row's left/right
@@ -740,9 +815,17 @@ export default function Grid({ view, onResized }: GridProps) {
         void doPaste();
         return;
       }
-      // Delete / Backspace — clear (mask to gaps) the selected rectangle. The
-      // first reversible edit (Delete = clear-to-gap; Cut = remove + close up
-      // lands later). No selection ⇒ nothing to delete.
+      // Cut (Ctrl/⌘+X) — copy the selection to the clipboard then remove it, in the
+      // current cut mode (Shorten deletes + shifts left; Mask clears to gaps).
+      // `doCut` guards the no-selection / over-cap / write-denied cases.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "x" || e.key === "X")) {
+        e.preventDefault();
+        void doCut();
+        return;
+      }
+      // Delete / Backspace — clear (mask to gaps) the selected rectangle, WITHOUT
+      // copying to the clipboard (the uncapped masking path; Cut = copy + remove is
+      // Ctrl/⌘+X above). No selection ⇒ nothing to delete.
       if (e.key === "Delete" || e.key === "Backspace") {
         const sel = store.getSelection();
         if (sel) {
@@ -975,8 +1058,11 @@ export default function Grid({ view, onResized }: GridProps) {
         onSetPasteMode={handleSetPasteMode}
         shiftAll={shiftAll}
         onSetShiftAll={handleSetShiftAll}
+        cutMode={cutMode}
+        onSetCutMode={handleSetCutMode}
         onCopy={doCopy}
         onPaste={handlePaste}
+        onCut={handleCut}
         message={copyMsg}
       />
       <div className="grid-container" style={CHROME_VARS}>
