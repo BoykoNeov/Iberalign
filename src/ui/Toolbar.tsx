@@ -1,7 +1,8 @@
 // The grid toolbar: selection-scoped actions pinned above the grid. It holds the
 // copy controls — the `Sel: C × R` readout, the Copy button, the Raw|FASTA copy-
-// format toggle — and the paste controls — the Paste button + an Insert|Overwrite
-// mode toggle — plus an ephemeral status message ("Copied …" / "Inserted …" / a
+// format toggle — and the paste controls — the Paste button, an Insert|Overwrite
+// mode toggle, and (for Insert) a shift-scope toggle: shift the Pasted rows only
+// vs All rows — plus an ephemeral status message ("Copied …" / "Inserted …" / a
 // warning). It is where the cut controls will join (Batch D).
 //
 // Presentational: all state (the selection mirror, the chosen format/mode, the
@@ -24,6 +25,10 @@ interface ToolbarProps {
   /** The active raw-paste mode (the Insert|Overwrite toggle). */
   pasteMode: PasteMode;
   onSetPasteMode: (mode: PasteMode) => void;
+  /** Insert shift scope: `true` shifts all rows (keeps columns aligned), `false`
+   *  (default) shifts only the pasted rows. Only applies in Insert mode. */
+  shiftAll: boolean;
+  onSetShiftAll: (v: boolean) => void;
   /** Copy the current selection (a no-op upstream when nothing is selected). */
   onCopy: () => void;
   /** Paste the clipboard (FASTA ⇒ new sequences; else a block in the paste mode). */
@@ -38,11 +43,16 @@ export default function Toolbar({
   onSetFormat,
   pasteMode,
   onSetPasteMode,
+  shiftAll,
+  onSetShiftAll,
   onCopy,
   onPaste,
   message,
 }: ToolbarProps) {
   const hasSel = selInfo !== null;
+  // The shift-scope toggle only applies to an Insert paste; disable (don't hide,
+  // to avoid reflowing the strip) it in Overwrite mode.
+  const shiftDisabled = pasteMode !== "insert";
   return (
     <div className="grid-toolbar">
       <span className="toolbar-seg toolbar-sel">
@@ -101,7 +111,7 @@ export default function Toolbar({
           className={pasteMode === "insert" ? "toggle-on" : ""}
           aria-pressed={pasteMode === "insert"}
           onClick={() => onSetPasteMode("insert")}
-          title="Insert a pasted block, shifting existing columns right (the alignment grows)"
+          title="Insert a pasted block — the alignment grows in width (use the shift toggle to keep all rows aligned)"
         >
           Insert
         </button>
@@ -113,6 +123,30 @@ export default function Toolbar({
           title="Overwrite cells in place; grow the width only if the block runs past the right edge"
         >
           Overwrite
+        </button>
+      </span>
+
+      <span className="toolbar-label">shift</span>
+      <span className="toolbar-toggle" role="group" aria-label="Insert shift scope">
+        <button
+          type="button"
+          className={!shiftAll ? "toggle-on" : ""}
+          aria-pressed={!shiftAll}
+          disabled={shiftDisabled}
+          onClick={() => onSetShiftAll(false)}
+          title="Shift only the pasted rows right — columns to the right go ragged (Insert only)"
+        >
+          Pasted
+        </button>
+        <button
+          type="button"
+          className={shiftAll ? "toggle-on" : ""}
+          aria-pressed={shiftAll}
+          disabled={shiftDisabled}
+          onClick={() => onSetShiftAll(true)}
+          title="Insert gaps in every row so the columns stay aligned (Insert only)"
+        >
+          All
         </button>
       </span>
 

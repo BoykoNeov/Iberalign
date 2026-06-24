@@ -139,6 +139,14 @@ export default function Grid({ view, onResized }: GridProps) {
   // sequences.)
   const [pasteMode, setPasteMode] = useState<PasteMode>("insert");
   const pasteModeRef = useRef<PasteMode>("insert");
+  // Within an INSERT paste, which rows get the inserted gaps: `false` (default,
+  // "shift pasted rows only") grows just the pasted rows and trailing-pads the
+  // rest — the columns to the right go ragged; `true` ("shift all rows") inserts
+  // gaps at the paste column in EVERY row, so the alignment stays column-aligned.
+  // Only meaningful in Insert mode (Overwrite ignores it). Ref shadows it for the
+  // once-bound paste path, same as `pasteMode`.
+  const [shiftAll, setShiftAll] = useState(false);
+  const shiftAllRef = useRef(false);
   // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
   // red, `info` (copied / inserted) is plain. The message PERSISTS — it does not
   // time out; it clears when the user takes their next action (see the effect below)
@@ -226,6 +234,13 @@ export default function Grid({ view, onResized }: GridProps) {
   const handleSetPasteMode = useCallback((mode: PasteMode) => {
     pasteModeRef.current = mode;
     setPasteMode(mode);
+  }, []);
+
+  // Toggle the insert shift scope (shift pasted rows only | shift all rows) from
+  // the toolbar; mirror into the ref the effect-scoped paste reads.
+  const handleSetShiftAll = useCallback((v: boolean) => {
+    shiftAllRef.current = v;
+    setShiftAll(v);
   }, []);
 
   // Toolbar Paste button → the effect-scoped paste flow (via the ref above).
@@ -600,21 +615,23 @@ export default function Grid({ view, onResized }: GridProps) {
       const dropped = rows.length - keptRows;
       const w = rows.slice(0, keptRows).reduce((m, line) => Math.max(m, line.length), 0);
       const overwrite = pasteModeRef.current === "overwrite";
+      const shiftAll = !overwrite && shiftAllRef.current;
       const ok = await runEdit(() =>
-        overwrite ? pasteOverwrite(r0, c0, rows) : pasteInsert(r0, c0, rows, false),
+        overwrite ? pasteOverwrite(r0, c0, rows) : pasteInsert(r0, c0, rows, shiftAll),
       );
       if (!ok) return; // empty block (all kept lines blank) ⇒ no-op
       if (keptRows > 0 && w > 0) {
         store.setCursor(r0, c0);
         store.setActive(r0 + keptRows - 1, c0 + w - 1);
       }
+      // Note the shift scope (so shift-all vs shift-only is distinguishable in the
+      // readout) and any dropped rows; a drop makes the whole message a warning.
       const verb = overwrite ? "Overwrote" : "Inserted";
-      showMsg(
-        dropped > 0
-          ? `${verb} ${w} × ${keptRows} (${dropped} row${dropped > 1 ? "s" : ""} past the end dropped)`
-          : `${verb} ${w} × ${keptRows}`,
-        dropped > 0 ? "warn" : "info",
-      );
+      const notes: string[] = [];
+      if (shiftAll) notes.push("kept aligned");
+      if (dropped > 0) notes.push(`${dropped} row${dropped > 1 ? "s" : ""} past the end dropped`);
+      const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
+      showMsg(`${verb} ${w} × ${keptRows}${suffix}`, dropped > 0 ? "warn" : "info");
     };
 
     // Paste entry point (Ctrl/⌘+V + the toolbar button): read the clipboard once,
@@ -673,10 +690,10 @@ export default function Grid({ view, onResized }: GridProps) {
         void doCopyRef.current();
         return;
       }
-      // Paste (Ctrl/⌘+V) — insert the clipboard at the selection (the default
-      // shift-only mode; overwrite + shift-all join via the toolbar later).
-      // `doPaste` reads + parses the clipboard, so a no-selection / empty-clipboard
-      // paste is a guarded no-op.
+      // Paste (Ctrl/⌘+V) — drop the clipboard at the selection using the current
+      // toolbar settings (Insert|Overwrite mode, and for Insert the shift-pasted|
+      // shift-all scope). `doPaste` reads + parses the clipboard, so a no-selection
+      // / empty-clipboard paste is a guarded no-op.
       if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
         void doPaste();
@@ -915,6 +932,8 @@ export default function Grid({ view, onResized }: GridProps) {
         onSetFormat={handleSetFormat}
         pasteMode={pasteMode}
         onSetPasteMode={handleSetPasteMode}
+        shiftAll={shiftAll}
+        onSetShiftAll={handleSetShiftAll}
         onCopy={doCopy}
         onPaste={handlePaste}
         message={copyMsg}

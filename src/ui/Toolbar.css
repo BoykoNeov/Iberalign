@@ -88,6 +88,14 @@
   color: #ffffff;
 }
 
+/* A disabled segment (e.g. the Insert shift scope while Overwrite is active):
+ * dim it and drop the pointer affordance. Keeps its toggle-on fill so the
+ * remembered choice still reads, just inactive. */
+.toolbar-toggle button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Ephemeral feedback, pinned right. A `warn` message (failure / dropped /
  * truncated) is bold red so it stands out; the default `info` tone is quiet. */
 .toolbar-msg {

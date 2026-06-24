@@ -199,10 +199,16 @@ dependency-light and surface toolchain/linker issues fast.
   truncated rows) = **bold red**, `info` = plain — and **persist until the user's next action**
   (no auto-timeout; a passive `useEffect` keyed on the message arms capture-phase
   keydown/mousedown/wheel listeners that clear it — the effect runs post-event so the producing
-  event can't self-clear; also cleared on file-open). **Remaining:** C3 within-insert
-  shift-all toggle (engine done — toolbar wiring only); leftover C4 (grow-to-fit for
-  paste-as-sequences, alphabet-mismatch warn, paste size-guard); Batch D = Cut (default =
-  shorten). Detail in `docs/plans/copy-paste-{plan,context,tasks}.md`.
+  event can't self-clear; also cleared on file-open). **C3 within-insert shift-all toggle —
+  code complete + green (GUI smoke pending).** A third segmented toolbar toggle (`shift`
+  label + `Pasted | All`) wires the engine's already-tested `shift_all` flag (default
+  `Pasted` = shift only the pasted rows / ragged; `All` = insert gaps in every row so columns
+  stay aligned); the toggle is **disabled, not hidden, in Overwrite mode** (hiding would
+  reflow the right-pinned message) — which needed a new `.toolbar-toggle button:disabled` CSS
+  rule (the existing custom bg/color made a disabled toggle look active). The insert message
+  appends `(kept aligned)` for shift-all so the modes are distinguishable. **Remaining:**
+  leftover C4 (grow-to-fit for paste-as-sequences, alphabet-mismatch warn, paste size-guard);
+  Batch D = Cut (default = shorten). Detail in `docs/plans/copy-paste-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

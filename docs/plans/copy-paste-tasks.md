@@ -136,9 +136,20 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
         past the right edge — never truncates horizontally; rows past the bottom dropped).
       Verify: align-core 25 (+8), iberalign 15 (+4), clippy/fmt ✓, typecheck ✓, 166 vitest
       (+6) ✓, build ✓.
-- [ ] **C3** Paste insert, shift-all toggle — **engine already done** (the `shift_all`
-      flag + tests); this is the toolbar toggle wiring only. (Still future — C5 added the
-      Insert|Overwrite toggle, NOT the within-insert shift-only|shift-all toggle.)
+- [x] **C3** Paste insert, shift-all toggle — **DONE + green** (this batch). Engine was
+      already done (`shift_all` flag + `paste_insert_shift_only_*` / `paste_insert_shift_all_*`
+      tests); pure toolbar wiring. `Grid` gained `shiftAll` state + `shiftAllRef` (default
+      `false`) + `handleSetShiftAll`; `pasteRawBlock` reads `shiftAllRef.current` (forced
+      `false` in Overwrite) and passes it to `pasteInsert` — replacing the hardwired `false`
+      at the single call site. `Toolbar` got a third segmented toggle (`shift` label +
+      `Pasted | All`), **disabled (not hidden, to avoid reflowing the right-pinned message)
+      when mode is Overwrite** — which exposed a missing `.toolbar-toggle button:disabled`
+      CSS rule (without it the custom bg/color made a disabled toggle look active); added it
+      (opacity 0.5 + `cursor:default`, keeps the toggle-on fill). Message now appends
+      `(kept aligned)` for shift-all so the modes are distinguishable in the readout (notes
+      joined with the dropped-rows note). Stale text fixed: Insert tooltip no longer claims
+      "shifting existing columns right" (that was shift-all); Ctrl+V comment updated.
+      Verify: typecheck ✓, 166 vitest ✓, build ✓. (GUI smoke pending.)
 - [ ] **C4** (mostly absorbed by C5) remaining: alphabet warn on paste; paste size-guard;
       **grow-to-fit for paste-as-sequences** (today: clamp + warn). The Insert|Overwrite
       buttons + FASTA auto-detect landed in C5.
