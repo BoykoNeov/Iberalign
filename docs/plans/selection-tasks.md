@@ -142,3 +142,13 @@ wheel / scrollbars) / zoom unregressed.
       note no longer applies.)
 - [x] Batch-end ritual: updated these docs + `CLAUDE.md` milestone status + memory;
       commit (Conventional Commits) + push; CI green.
+
+## Refinement (2026-06-24) — header inversion for whole row/col selection (R2)
+
+- [x] **Selected rows/cols invert their header band.** In ROWS mode the selected names in
+      the left name gutter invert (dark band + light text); in COLS mode the selected numbers
+      in the top ruler invert (dark band + light ticks/labels) — so it reads that whole
+      sequences / whole columns are selected, not just the grid rectangle. Both renderers take
+      optional `getSelection`/`getMode` accessors read each dirty frame (same pattern as
+      `SelectionLayer`); `NameColumnRenderer` + `RulerRenderer`; wired in `Grid.tsx` mount.
+      GUI smoke PASSED 2026-06-24 (user "all good").

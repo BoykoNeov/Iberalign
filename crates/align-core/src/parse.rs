@@ -27,6 +27,18 @@ pub struct ParseOutcome {
     pub warnings: Vec<String>,
 }
 
+/// Knobs for [`parse_fasta_with`]. The file/CLI load path uses the defaults
+/// (tolerant: empty records dropped); the clipboard PASTE path opts into
+/// `keep_empty_records` so an empty-body FASTA record (`>name` with no residues
+/// — how this app's FASTA copy serializes an all-gap selection) round-trips back
+/// as an empty (all-gap) sequence with its name intact, instead of vanishing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParseOptions {
+    /// Keep records whose body is empty as zero-length [`RawRecord`]s (default
+    /// `false` = warn + skip them, the tolerant load behavior).
+    pub keep_empty_records: bool,
+}
+
 /// Lightweight, UI-facing description of a parsed set of records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Summary {
@@ -54,7 +66,19 @@ pub struct Summary {
 /// Tolerant by design: blank/comment lines are ignored, an empty record body is
 /// skipped with a warning, and duplicate names are disambiguated with a
 /// warning. The only hard error is input with no `>` header at all.
+///
+/// This is [`parse_fasta_with`] under [`ParseOptions::default`] — the load path.
+/// Use `parse_fasta_with` to keep empty records (the clipboard paste path).
 pub fn parse_fasta(bytes: &[u8]) -> Result<ParseOutcome, ParseError> {
+    parse_fasta_with(bytes, ParseOptions::default())
+}
+
+/// [`parse_fasta`] with [`ParseOptions`]. The only knob today is
+/// `keep_empty_records`: with it set, an empty-body record is kept as a
+/// zero-length [`RawRecord`] (name + description preserved) rather than
+/// warn-skipped — so a `>name` header with no residues survives a paste as an
+/// empty sequence instead of being dropped.
+pub fn parse_fasta_with(bytes: &[u8], opts: ParseOptions) -> Result<ParseOutcome, ParseError> {
     let mut records: Vec<RawRecord> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut seen_header = false;
@@ -65,7 +89,10 @@ pub fn parse_fasta(bytes: &[u8]) -> Result<ParseOutcome, ParseError> {
     let mut cur_gapped: Vec<u8> = Vec::new();
     let mut cur_ordinal = 0usize;
 
-    // Flush the in-progress record: push it, or warn + skip if its body is empty.
+    let keep_empty = opts.keep_empty_records;
+
+    // Flush the in-progress record: push it. An empty body is kept (zero-length)
+    // when `keep_empty`, else warn + skipped (the tolerant load default).
     let flush = |name: &mut Option<String>,
                  desc: &mut String,
                  gapped: &mut Vec<u8>,
@@ -74,7 +101,7 @@ pub fn parse_fasta(bytes: &[u8]) -> Result<ParseOutcome, ParseError> {
                  warns: &mut Vec<String>| {
         if let Some(n) = name.take() {
             let gapped = std::mem::take(gapped);
-            if gapped.is_empty() {
+            if gapped.is_empty() && !keep_empty {
                 warns.push(format!(
                     "record {ordinal} '{n}' has an empty sequence body; skipped"
                 ));

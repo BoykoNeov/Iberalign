@@ -14,6 +14,7 @@
 
 import type { AlignmentView } from "../model/view";
 import type { Dims, Viewport } from "../state/viewport";
+import { normalize, type Selection, type SelectionMode } from "../state/selection";
 import { colToX, visibleCols } from "./viewport";
 import { niceLabelStep } from "./ticks";
 import { CHROME, MIN_LABEL_PX } from "./chrome";
@@ -23,7 +24,18 @@ export class RulerRenderer {
   private readonly ctx: CanvasRenderingContext2D;
   private dpr = 1;
 
-  constructor(canvas: HTMLCanvasElement) {
+  /**
+   * @param getSelection / @param getMode  Optional accessors read each dirty
+   *   frame (mirror of `NameColumnRenderer`). When a COLS-mode selection is
+   *   active, the selected columns' band inverts (dark fill + light labels), so
+   *   it's visible that whole columns are selected. Other modes leave the ruler
+   *   plain.
+   */
+  constructor(
+    canvas: HTMLCanvasElement,
+    private readonly getSelection?: () => Selection | null,
+    private readonly getMode?: () => SelectionMode,
+  ) {
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("RulerRenderer: 2D context unavailable");
     this.canvas = canvas;
@@ -56,6 +68,21 @@ export class RulerRenderer {
     const cols = visibleCols(vp, dims, 1);
     if (cols.last < cols.first) return;
 
+    // Cols-mode selection → invert the selected columns' band (dark fill, then
+    // light ticks/labels below). `c0..c1` is the selected span (empty otherwise).
+    const sel = this.getMode?.() === "cols" ? (this.getSelection?.() ?? null) : null;
+    const rect = sel ? normalize(sel) : null;
+    const c0 = rect ? rect.c0 : -1;
+    const c1 = rect ? rect.c1 : -1;
+    if (rect) {
+      const xL = Math.max(0, Math.round(colToX(vp, c0) * dpr));
+      const xR = Math.min(cw, Math.round(colToX(vp, c1 + 1) * dpr));
+      if (xR > xL) {
+        ctx.fillStyle = CHROME.ink;
+        ctx.fillRect(xL, 0, xR - xL, sepY);
+      }
+    }
+
     const step = niceLabelStep(vp.cellW, MIN_LABEL_PX);
     const tickLen = Math.round(4 * dpr);
     const fontPx = Math.round(11 * dpr);
@@ -68,9 +95,11 @@ export class RulerRenderer {
       if ((col + 1) % step !== 0) continue;
       // Column center in device px, from the SAME transform as the grid cells.
       const xCenter = Math.round((colToX(vp, col) + vp.cellW / 2) * dpr);
-      ctx.fillStyle = CHROME.line;
+      // Selected columns draw tick + label in the bg color (light) over the band.
+      const inSel = col >= c0 && col <= c1;
+      ctx.fillStyle = inSel ? CHROME.bg : CHROME.line;
       ctx.fillRect(xCenter - Math.floor(lw / 2), sepY - tickLen, lw, tickLen);
-      ctx.fillStyle = CHROME.ink;
+      ctx.fillStyle = inSel ? CHROME.bg : CHROME.ink;
       ctx.fillText(String(col + 1), xCenter, labelY);
     }
   }

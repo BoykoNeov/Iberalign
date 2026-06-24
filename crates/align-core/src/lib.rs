@@ -27,4 +27,6 @@ pub use edit::{
     apply_to_dataset, CellWrite, EditCmd, EditError, EditOutcome, EditStack, RowData, RowSplice,
 };
 pub use model::{AlignedRow, Alignment, Alphabet, Dataset, RawRecord, SeqId, Sequence};
-pub use parse::{parse_fasta, summarize, ParseError, ParseOutcome, Summary};
+pub use parse::{
+    parse_fasta, parse_fasta_with, summarize, ParseError, ParseOptions, ParseOutcome, Summary,
+};

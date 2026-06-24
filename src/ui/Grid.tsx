@@ -366,8 +366,19 @@ export default function Grid({ view, onResized }: GridProps) {
     const cell = cellRef.current!;
     const store = new GridStore();
     const renderer = new Canvas2DRenderer(canvas);
-    const ruler = new RulerRenderer(rulerRef.current!);
-    const names = new NameColumnRenderer(nameRef.current!);
+    // Pass selection accessors so the headers invert the selected rows / columns
+    // (rows-mode → names; cols-mode → ruler), making whole-row/col selections
+    // visible alongside the grid rectangle.
+    const ruler = new RulerRenderer(
+      rulerRef.current!,
+      () => store.getSelection(),
+      () => store.getSelectionMode(),
+    );
+    const names = new NameColumnRenderer(
+      nameRef.current!,
+      () => store.getSelection(),
+      () => store.getSelectionMode(),
+    );
     // Empty-in-M2 track lane (consensus/conservation land here in M4) and the
     // whole-alignment minimap — both `Drawable`s on the same rAF loop, so they
     // stay frame-synced with the grid under pan/zoom (the minimap's viewport

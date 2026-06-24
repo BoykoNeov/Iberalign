@@ -268,6 +268,28 @@ dependency-light and surface toolchain/linker issues fast.
   capability (clipboard WRITE already granted; custom commands aren't capability-gated; cut writes, so
   no READ perm). align-core 28 / iberalign 22 (+4) / 172 vitest; clippy + fmt clean. Detail in
   `docs/plans/copy-paste-{plan,context,tasks}.md`.
+- **Structural row/column delete (Batch 1) — committed `aae3b5d`.** Selection grew a
+  `SelectionMode` (`cell`/`rows`/`cols`); header-click gestures select whole rows (name
+  gutter) / columns (ruler); `delete_rows`/`delete_columns` IPC commands remove them
+  structurally (reversible via the engine `EditCmd` stack); Delete-key `Shorten|Mask`
+  toggle. Foundation for the consensus-track work (Batch 2/3 below).
+- **Copy/selection refinements — code complete + green; GUI smoke PASSED (2026-06-24).**
+  Three follow-ups landed together on top of the delete batch: **(R1) empty rows ↔ empty
+  FASTA round-trip** — FASTA copy of an all-gap slice → bare `>name`, and pasting it back
+  recreates the named empty sequence (opt-in `ParseOptions{keep_empty_records}` +
+  `parse_fasta_with`; `paste_sequences` opts in; loader/CLI keep skip-and-warn);
+  **(R2) header inversion** — in rows-mode the selected names in the left gutter invert,
+  in cols-mode the selected numbers in the ruler invert, so whole-row/col selection reads
+  clearly (`NameColumnRenderer`/`RulerRenderer` take `getSelection`/`getMode`);
+  **(R3) trailing-edge gap discard in FASTA copy** — FASTA copy strips each sequence's
+  trailing run of gaps (right-pad isn't biological), keeps interior gaps; **raw stays
+  WYSIWYG; the live matrix is untouched (serialization only)** (`model/copy.ts::stripTrailingGaps`).
+  align-core 30 / fmt + clippy clean / typecheck clean / **190 vitest** / build OK. Detail in
+  `docs/plans/copy-paste-tasks.md` + `selection-tasks.md` (Refinements sections).
+- **Consensus track (Batch 2) + track copy-as-IUPAC (Batch 3) — NEXT, not started.** The
+  M2 `TrackLaneRenderer` is an empty lane; M4 will fill it. Pulled ahead at user request:
+  per-column IUPAC consensus over the selected rows (all if none), painted in the track;
+  then the track itself becomes selectable + copyable as IUPAC ambiguity codes.
 
 ## Dev-docs
 

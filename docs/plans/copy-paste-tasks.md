@@ -264,3 +264,22 @@ below + the `r1`-clamp fix).
 
 - [x] **Cut default = shorten** (user, 2026-06-23). Symmetric with the local paste
       default; mask-to-gaps becomes the toggle alternative.
+
+## Refinements (post-structural-delete, 2026-06-24) — code complete + GUI smoke PASSED
+
+- [x] **Empty rows ↔ empty FASTA round-trip (R1).** FASTA copy of an all-gap (empty)
+      slice serializes as a bare `>name` header (no body line); pasting that header back
+      recreates the named empty sequence. Root cause was `parse_fasta` always skipping
+      empty-body records — fixed with an opt-in `ParseOptions{keep_empty_records}` +
+      `parse_fasta_with`; the file loader / CLI keep the default (skip + warn), `paste_sequences`
+      opts into keep-empty. New tests: align-core `keep_empty_records_preserves_empty_bodies`;
+      `commands.rs` empty-record-as-padded-gap-row + empty-into-empty-alignment-no-panic.
+- [x] **Trailing-edge gap discard in FASTA copy (R3).** FASTA copy drops each sequence's
+      TRAILING run of gaps (the right-pad that squares the matrix to alignment width is not
+      biological) while KEEPING interior gaps (alignment structure). `model/copy.ts::stripTrailingGaps`;
+      an all-gap slice strips to "" → the bare-header limit of the same rule. **Raw copy stays
+      WYSIWYG** (equal-width lines so block-paste round-trips); the **live matrix is untouched**
+      (serialization only). Tests: interior-vs-trailing (`AC--GT--`→`AC--GT`), all-gap rows.
+- [x] **Gate:** align-core 30 / fmt + clippy clean / typecheck clean / **190 vitest** / build OK.
+- [x] **GUI smoke (human) — PASSED 2026-06-24 (user "works as intended").** Short/padded
+      sequence FASTA-copies with no trailing dashes; empty rows round-trip as named empty FASTAs.

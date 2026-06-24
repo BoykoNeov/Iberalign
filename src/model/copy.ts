@@ -1,10 +1,15 @@
 // Build the clipboard text for a selected rectangle of the alignment. Pure: it
 // reads the frontend's render-buffer view (Rust still owns the truth — copy is
 // read-only) plus the row names, and returns the string the clipboard plugin
-// writes. Two formats, both WYSIWYG — the gaps (`-`) in the selected columns are
-// KEPT, so the copied block is exactly the slice shown and a copy→paste round-
-// trips back into the same columns. (A "strip gaps to the biological sequence"
-// option can layer on later as a sub-toggle; it is deliberately not the default.)
+// writes. `raw` is WYSIWYG — the gaps (`-`) in the selected columns are KEPT, so
+// the copied block is exactly the slice shown and a copy→paste round-trips back
+// into the same columns. `fasta` DROPS each sequence's TRAILING-edge gaps (the
+// right-pad that squares the matrix up to the alignment width is not biological),
+// keeping INTERIOR gaps (those are alignment structure). A slice that is all gaps
+// (an empty sequence) collapses to a bare `>name` header — the limit of the same
+// rule — and pastes back as an empty, name-preserved sequence (FASTA paste inserts
+// new sequences; see `commands.rs::paste_sequences`, which keeps empty records).
+// The live matrix is untouched — it stays rectangular; this is serialization only.
 
 import type { AlignmentView } from "./view";
 import type { CellRect } from "../state/selection";
@@ -32,6 +37,15 @@ function rowResidues(view: AlignmentView, row: number, c0: number, c1: number): 
   return DECODER.decode(view.rowSlice(row).subarray(c0, c1 + 1));
 }
 
+/** `s` with its trailing run of gaps (`-`) removed — interior gaps are kept.
+ *  An all-gap (or empty) slice returns "". Gaps are normalized to `-` in the
+ *  buffer, so that single char is the test. */
+function stripTrailingGaps(s: string): string {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === "-") end--;
+  return s.slice(0, end);
+}
+
 /**
  * Serialize the selected rectangle for the clipboard.
  *   - `raw`   → one row per line, the selected residues only (no names).
@@ -42,8 +56,16 @@ function rowResidues(view: AlignmentView, row: number, c0: number, c1: number): 
 export function buildCopyText(view: AlignmentView, rect: CellRect, format: CopyFormat): string {
   const lines: string[] = [];
   for (let r = rect.r0; r <= rect.r1; r++) {
-    if (format === "fasta") lines.push(`>${view.nameAt(r)}`);
-    lines.push(rowResidues(view, r, rect.c0, rect.c1));
+    const residues = rowResidues(view, r, rect.c0, rect.c1);
+    if (format === "fasta") {
+      lines.push(`>${view.nameAt(r)}`);
+      // Drop the trailing-edge gaps (the right-pad), keep interior gaps. An all-
+      // gap slice strips to "" → a bare header (an empty FASTA record).
+      const body = stripTrailingGaps(residues);
+      if (body.length > 0) lines.push(body);
+    } else {
+      lines.push(residues); // raw: WYSIWYG, gaps kept even for an empty row
+    }
   }
   return lines.join("\n");
 }

@@ -645,7 +645,16 @@ pub async fn paste_sequences(
     text: String,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<PasteSeqDto, String> {
-    let out = align_core::parse_fasta(text.as_bytes()).map_err(|e| e.to_string())?;
+    // Keep empty-body records: an all-gap selection serializes to `>name` with
+    // no residues (see `model/copy.ts`), and that empty FASTA must paste back as
+    // an empty (all-gap) sequence with its name, not be dropped.
+    let out = align_core::parse_fasta_with(
+        text.as_bytes(),
+        align_core::ParseOptions {
+            keep_empty_records: true,
+        },
+    )
+    .map_err(|e| e.to_string())?;
     let mut guard = state
         .lock()
         .map_err(|_| "state lock poisoned".to_string())?;
@@ -1203,6 +1212,51 @@ mod tests {
         let (cmd, truncated) = paste_sequences_cmd(&ds, 1, &[]);
         assert_eq!(truncated, 0);
         assert!(matches!(cmd, EditCmd::InsertRows { rows, .. } if rows.is_empty()));
+    }
+
+    #[test]
+    fn paste_sequences_cmd_keeps_empty_record_as_padded_gap_row() {
+        // An empty-body record (a `>name` with no residues — how FASTA copy
+        // serializes an all-gap selection) inserts as an all-gap row padded to the
+        // alignment width, name preserved. The round-trip the empty-FASTA copy needs.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let records = [rec("empty", "")];
+        let (cmd, truncated) = paste_sequences_cmd(&ds, 2, &records);
+        assert_eq!(truncated, 0);
+        match &cmd {
+            EditCmd::InsertRows { rows, .. } => {
+                assert_eq!(rows[0].gapped, b"----"); // padded to width 4
+                assert_eq!(rows[0].name, "empty");
+            }
+            other => panic!("expected InsertRows, got {other:?}"),
+        }
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 3);
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT----");
+        assert_eq!(ds.sequences[2].name, "empty");
+        assert!(ds.sequences[2].residues.is_empty()); // an empty sequence (no residues)
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 2);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn paste_sequences_cmd_empty_record_into_empty_alignment_no_panic() {
+        // Degenerate edge: an empty record into a 0-row/0-width alignment → widest 0
+        // → a width-0 InsertRows. Must apply without panicking the width check.
+        let mut ds = Dataset::default();
+        let mut history = align_core::EditStack::new();
+        let records = [rec("e", "")];
+        let (cmd, truncated) = paste_sequences_cmd(&ds, 0, &records);
+        assert_eq!(truncated, 0);
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 1);
+        assert_eq!(ds.alignment.width, 0);
+        assert_eq!(ds.sequences[0].name, "e");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 0);
     }
 
     // ---- structural delete (delete_rows / delete_columns) ------------------

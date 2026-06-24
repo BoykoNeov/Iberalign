@@ -1,7 +1,7 @@
 //! Tests for the tolerant FASTA parser and the load summary.
 
 use align_core::model::{Alphabet, Dataset};
-use align_core::parse::{parse_fasta, summarize, ParseError};
+use align_core::parse::{parse_fasta, parse_fasta_with, summarize, ParseError, ParseOptions};
 
 #[test]
 fn parses_basic_multi_record() {
@@ -65,6 +65,23 @@ fn empty_record_body_is_skipped_with_warning() {
     assert_eq!(out.records[0].name, "real");
     assert_eq!(out.warnings.len(), 1);
     assert!(out.warnings[0].contains("empty"));
+}
+
+#[test]
+fn keep_empty_records_preserves_empty_bodies() {
+    // The PASTE path: an empty-body record (`>empty`) is KEPT as a zero-length
+    // record (name preserved, no warning), so a `>name` from an all-gap FASTA copy
+    // round-trips back as an empty sequence instead of vanishing.
+    let opts = ParseOptions {
+        keep_empty_records: true,
+    };
+    let out = parse_fasta_with(b">empty\n>real\nACGT\n", opts).unwrap();
+    assert_eq!(out.records.len(), 2);
+    assert_eq!(out.records[0].name, "empty");
+    assert!(out.records[0].gapped.is_empty());
+    assert_eq!(out.records[1].name, "real");
+    assert_eq!(out.records[1].gapped, b"ACGT");
+    assert!(out.warnings.is_empty()); // kept, not warn-skipped
 }
 
 #[test]
