@@ -872,6 +872,37 @@ mod tests {
     }
 
     #[test]
+    fn paste_sequences_cmd_grow_at_interior_row_round_trips() {
+        // GROW with at < num_rows (paste partway down): the new wide row lands
+        // BETWEEN the existing rows, both of which pad to the new width. Pins the
+        // undo ordering for the interior case — the inverse must DeleteRows (drop the
+        // inserted row) before the SpliceRows-trim, so the existing-row indices the
+        // trim targets are valid.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let records = [rec("wide", "GGGGGG")];
+        let (cmd, truncated) = paste_sequences_cmd(&ds, 1, &records);
+        assert_eq!(truncated, 0);
+        assert!(matches!(cmd, EditCmd::Batch { .. }));
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.num_rows(), 3);
+        // Row order: a (padded), wide (inserted at 1), b (padded).
+        assert_eq!(flatten_buffer(&ds), b"ACGT--GGGGGGTTTT--");
+        assert_eq!(ds.sequences[1].name, "wide");
+        // Undo trims the existing rows back to width 4 AND removes the inserted row.
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.num_rows(), 2);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+        // Redo restores the grown, interior-inserted state.
+        history.redo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(flatten_buffer(&ds), b"ACGT--GGGGGGTTTT--");
+        assert_eq!(ds.sequences[1].name, "wide");
+    }
+
+    #[test]
     fn paste_sequences_cmd_no_grow_when_records_fit() {
         // Records no wider than the alignment → a plain InsertRows (pad short ones),
         // no truncation, width unchanged.

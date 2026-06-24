@@ -212,20 +212,23 @@ alphabet-mismatch warning; the within-insert shift-all toggle (C3).
   alignment would pad EVERY existing row out to it (`num_rows × new_width`), so above the cap it
   falls back to clamp-to-width (the only `truncated > 0` case). `PasteSeqDto` doc updated; shape
   unchanged. New tests: `grow_target_width_picks_grow_clamp_or_keep`, `paste_sequences_cmd_*`
-  (grows-and-undo / no-grow-when-fits / empty-alignment-adopts-widest / empty-records-noop).
+  (grows-and-undo / **interior-row grow at `at=1` undo+redo** / no-grow-when-fits /
+  empty-alignment-adopts-widest / empty-records-noop).
 
 **Frontend**
-- `model/paste.ts` — `PASTE_TEXT_CAP` (10M chars) + `pasteAlphabetWarning(lines, alphabet)`
-  (advisory; nucleotide alignments flag non-IUPAC-nucleotide LETTERS, Protein never warns; gaps
-  / `*` / digits / case ignored; returns a `"N residues outside the X alphabet (e.g. …)"` string
-  or null). `paste.test.ts` +6.
+- `model/paste.ts` — `PASTE_TEXT_CAP` (10M chars, input) + `PASTE_RESULT_CELL_CAP` (100M cells,
+  raw-block output) + `pasteAlphabetWarning(lines, alphabet)` (advisory; nucleotide alignments
+  flag non-IUPAC-nucleotide LETTERS, Protein never warns; gaps / `*` / digits / case ignored;
+  returns a `"N residues outside the X alphabet (e.g. …)"` string or null). `paste.test.ts` +6.
 - `ipc/edit.ts` — `PasteSeqResult` + `pasteSequences` docs note grow-to-fit (`truncated` is the
   rare cap fallback now).
-- `ui/Grid.tsx` — `doPaste`: **size-guard** (refuse over `PASTE_TEXT_CAP`), then compute the
-  **alphabet note** once over `parseClipboard(text)` and thread it into `pasteFasta` /
-  `pasteRawBlock`; both append it to the result message (presence → tone `warn`). `pasteFasta`
-  captures `prevWidth` and adds an `"alignment widened to W"` info note when grow widened the
-  alignment (mutually exclusive with the truncated note).
+- `ui/Grid.tsx` — `doPaste`: **input size-guard** (refuse over `PASTE_TEXT_CAP`), then compute
+  the **alphabet note** once over `parseClipboard(text)` and thread it into `pasteFasta` /
+  `pasteRawBlock`; both append it to the result message (presence → tone `warn`). `pasteRawBlock`:
+  an **output size-guard** (refuse when `numRows × (width + w) > PASTE_RESULT_CELL_CAP` — insert /
+  grow-overwrite widen every row by `w`, the OOM vector `PASTE_TEXT_CAP` can't catch; advisor).
+  `pasteFasta` captures `prevWidth` and adds an `"alignment widened to W"` info note when grow
+  widened the alignment (mutually exclusive with the truncated note).
 
 ## Seams for Batches C–D (paste/cut, building on the B foundation)
 

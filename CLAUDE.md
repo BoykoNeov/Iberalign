@@ -211,16 +211,20 @@ dependency-light and surface toolchain/linker issues fast.
   (frontend-pure `model/paste.ts::pasteAlphabetWarning` — advisory, warn-not-reject; flags
   non-IUPAC-nucleotide LETTERS for DNA/RNA alignments, Protein never warns; computed once in
   `doPaste` over `parseClipboard`, threaded into both paste paths, appended to the result
-  message → tone warn); (2) **paste size-guard** (`PASTE_TEXT_CAP` 10M chars, mirrors
-  `COPY_CELL_CAP`; `doPaste` refuses an over-cap clipboard before routing); (3) **grow-to-fit for
+  message → tone warn); (2) **paste size-guard** (TWO caps: `PASTE_TEXT_CAP` 10M chars on the clipboard
+  INPUT in `doPaste`; `PASTE_RESULT_CELL_CAP` 100M cells on the raw-block OUTPUT in `pasteRawBlock`
+  — insert/grow-overwrite widen every row by `w`, an OOM vector the input cap can't catch, advisor-
+  flagged); (3) **grow-to-fit for
   paste-as-sequences** — the alignment now WIDENS to the widest pasted sequence (existing rows
   trailing-pad) instead of truncating, built on a NEW general engine primitive
   **`EditCmd::Batch { commands }`** (atomic compound edit; sub-inverses reversed; rollback on
   sub-command failure). Grow = `Batch[SpliceRows(pad existing rows), InsertRows(wider rows)]` =
   one undo. A **blow-up guard** (`PASTE_GROW_CELL_CAP` 100M cells) falls back to clamp-to-width
   when a huge sequence × a tall alignment would OOM (the only remaining `truncated > 0` case);
-  `pasteFasta` adds an "alignment widened to W" info note. align-core 28 / iberalign 17 / 172
-  vitest; clippy + fmt clean. **Remaining:** Batch D = Cut (default = shorten). Detail in
+  `pasteFasta` adds an "alignment widened to W" info note. align-core 28 / iberalign 18 / 172
+  vitest; clippy + fmt clean. Advisor-reviewed (post-commit): closed the raw-block output-cap gap
+  + added an interior-row (`at < num_rows`) grow undo/redo test. **Remaining:** Batch D = Cut
+  (default = shorten). Detail in
   `docs/plans/copy-paste-{plan,context,tasks}.md`.
 
 ## Dev-docs

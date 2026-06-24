@@ -40,7 +40,13 @@ import StatusBar from "./StatusBar";
 import Toolbar from "./Toolbar";
 import { normalize, rectDims } from "../state/selection";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
-import { looksLikeFasta, parseClipboard, pasteAlphabetWarning, PASTE_TEXT_CAP } from "../model/paste";
+import {
+  looksLikeFasta,
+  parseClipboard,
+  pasteAlphabetWarning,
+  PASTE_TEXT_CAP,
+  PASTE_RESULT_CELL_CAP,
+} from "../model/paste";
 import { copyText, readClipboardText } from "../ipc/clipboard";
 import { clearCells, pasteInsert, pasteOverwrite, pasteSequences, undoEdit, redoEdit } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
@@ -620,6 +626,19 @@ export default function Grid({ view, onResized }: GridProps) {
       const keptRows = Math.min(rows.length, v.numRows - r0);
       const dropped = rows.length - keptRows;
       const w = rows.slice(0, keptRows).reduce((m, line) => Math.max(m, line.length), 0);
+      // Output size-guard: insert and grow-overwrite widen EVERY row by up to `w`,
+      // so one very long line into a tall alignment can blow the buffer up to
+      // `numRows × (width + w)` cells (the OOM class the B2 smoke hit) — the input
+      // PASTE_TEXT_CAP doesn't bound this. `width + w` is an upper bound for both
+      // modes (overwrite grows to at most `width + w`). Refuse above the cap.
+      const resultCells = v.numRows * (v.width + w);
+      if (resultCells > PASTE_RESULT_CELL_CAP) {
+        showMsg(
+          `Paste too large — would grow to ${resultCells} cells (limit ${PASTE_RESULT_CELL_CAP})`,
+          "warn",
+        );
+        return;
+      }
       const overwrite = pasteModeRef.current === "overwrite";
       const shiftAll = !overwrite && shiftAllRef.current;
       const ok = await runEdit(() =>

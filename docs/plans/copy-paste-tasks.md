@@ -166,9 +166,14 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
         ignored. Computed ONCE in `Grid.doPaste` over `parseClipboard(text)` (headers/gaps
         stripped) and threaded into both paste paths, appended to the result message (bumps
         tone → warn). 6 new vitest tests.
-      - **Paste size-guard.** `PASTE_TEXT_CAP` (10M chars, mirrors `COPY_CELL_CAP`); `doPaste`
-        refuses an over-cap clipboard with a warn message before routing (cheap length check;
-        also bounds the alphabet scan + IPC payload).
+      - **Paste size-guard.** TWO caps, because input length and output cells are different
+        risks: `PASTE_TEXT_CAP` (10M chars, mirrors `COPY_CELL_CAP`) on the clipboard input —
+        `doPaste` refuses over-cap before routing (also bounds the alphabet scan + IPC payload);
+        and `PASTE_RESULT_CELL_CAP` (100M cells) on the raw-block OUTPUT — insert/grow-overwrite
+        widen EVERY row by the block width `w`, so a single very long line into a tall alignment
+        blows up to `numRows × (width + w)` cells, which the input cap can't catch (advisor —
+        the FASTA path already has the engine-side `PASTE_GROW_CELL_CAP`; this closes the
+        raw-block hole that C2/C3 shipped uncapped). `pasteRawBlock` refuses above it.
       - **Grow-to-fit for paste-as-sequences** (engine). Replaces clamp+truncate: the
         alignment WIDENS to the widest pasted sequence (existing rows trailing-pad), so
         nothing truncates — except the rare blow-up-guard fallback. Built on a new GENERAL
@@ -180,9 +185,11 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
         `PASTE_GROW_CELL_CAP` = 100M-cell guard so one huge sequence × a tall alignment can't
         OOM) + `paste_sequences_cmd`. `PasteSeqDto.truncated` is now 0 in the common case
         (nonzero only in the cap fallback); `Grid.pasteFasta` adds an "alignment widened to W"
-        info note. align-core +3 tests (Batch order/rollback/grow-round-trip), iberalign +5
-        (`grow_target_width`, `paste_sequences_cmd` ×4). Verify: align-core 28, iberalign 17,
-        clippy (incl. iberalign) / fmt ✓, typecheck ✓, 172 vitest ✓, build ✓.
+        info note. align-core +3 tests (Batch order/rollback/grow-round-trip), iberalign +6
+        (`grow_target_width`, `paste_sequences_cmd` ×5 incl. an **interior-row** grow at `at=1`
+        with undo+redo — advisor-flagged: the append-only grow tests didn't pin the
+        DeleteRows-before-trim inverse ordering for `at < num_rows`). Verify: align-core 28,
+        iberalign 18, clippy (incl. iberalign) / fmt ✓, typecheck ✓, 172 vitest ✓, build ✓.
 
 ## Messages — info/warn tone + persist-until-action ✅ (this batch)
 

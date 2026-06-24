@@ -27,6 +27,17 @@ export function parseClipboard(text: string): string[] {
  */
 export const PASTE_TEXT_CAP = 10_000_000;
 
+/**
+ * Largest RESULTING render buffer (in cells) a raw-block paste will build. Insert
+ * and grow-overwrite widen EVERY row by the block width `W`, so a single very long
+ * line into a tall alignment blows the buffer up to `numRows × (width + W)` cells —
+ * which {@link PASTE_TEXT_CAP} (an input-length bound) does NOT catch. The caller
+ * refuses above this. The FASTA paste-as-sequences path has its own engine-side
+ * grow cap (`PASTE_GROW_CELL_CAP`); this guards the raw-block path. Set at the
+ * 10k×10k stress ceiling — the size the renderer already handles.
+ */
+export const PASTE_RESULT_CELL_CAP = 100_000_000;
+
 // Residue letters (uppercased) accepted without warning for a nucleotide
 // alignment — the IUPAC nucleotide set `Alphabet::infer` treats as nucleic
 // (A C G T U N plus the ambiguity codes). A Protein alignment accepts every
