@@ -733,6 +733,15 @@ mod tests {
             .unwrap();
         assert_eq!(ds.alignment.width, 6);
         assert_eq!(flatten_buffer(&ds), b"AGGCGTT--TTT");
+        // shift_all emits one splice PER ROW (vs one per pasted row), so its inverse
+        // strips gaps from every row — confirm that larger inverse round-trips, then
+        // redo restores the forward result.
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+        history.redo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(flatten_buffer(&ds), b"AGGCGTT--TTT");
     }
 
     #[test]

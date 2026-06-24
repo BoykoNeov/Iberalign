@@ -149,7 +149,11 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       `(kept aligned)` for shift-all so the modes are distinguishable in the readout (notes
       joined with the dropped-rows note). Stale text fixed: Insert tooltip no longer claims
       "shifting existing columns right" (that was shift-all); Ctrl+V comment updated.
-      Verify: typecheck ✓, 166 vitest ✓, build ✓. (GUI smoke pending.)
+      **Engine test strengthened:** `paste_insert_shift_all_keeps_columns_aligned` only
+      asserted the forward result; since shift-all emits one splice PER ROW (a larger inverse
+      than shift-only's one-per-pasted-row), added undo + redo round-trip assertions to cover
+      the inverse (advisor-flagged as the highest-risk path). Verify: align-core 25, iberalign
+      15, fmt ✓, typecheck ✓, 166 vitest ✓, build ✓. (GUI smoke pending.)
 - [ ] **C4** (mostly absorbed by C5) remaining: alphabet warn on paste; paste size-guard;
       **grow-to-fit for paste-as-sequences** (today: clamp + warn). The Insert|Overwrite
       buttons + FASTA auto-detect landed in C5.
