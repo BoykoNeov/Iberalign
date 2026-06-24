@@ -20,8 +20,10 @@ tiers incl. density; fps not numerically measured; no-per-frame-IPC + single-can
 confirmed in source — see "Verify + wrap"). A **zoom indicator** (status-bar
 `N px/cell · tier`) landed alongside on user request. **Keyboard navigation +
 overlay scrollbars** landed and green (committed `b8664e2`, user-confirmed
-working at `tauri dev`). **Remaining: track lane / minimap** — then the M2
-batch-end ritual.
+working at `tauri dev`). **Track lane + minimap** are landed and green
+(typecheck / 181 vitest / build clean; `TrackLaneRenderer` + `MinimapLayer`
+Drawables, pure `minimap.ts` geometry round-trip-tested) — **GUI smoke pending**
+(human at `tauri dev`), then the M2 batch-end ritual closes the milestone.
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -113,12 +115,33 @@ batch-end ritual.
       scroll-synced horizontally. *(Loop generalized to drive a `Drawable[]`;
       `NAME_W`/`RULER_H`/palette centralized in `render/chrome.ts`, CSS vars set
       from them.)*
-- [ ] Empty **track lane** between ruler and grid — laid out, column-aligned,
-      reserved for M4. No data.
-- [ ] **Minimap** — whole-alignment overview: a **downsampled aggregate**
-      (occupancy/averaged color per bucket, reusing the density reduction)
-      computed once per load — not a scaled full draw. Viewport rectangle +
-      click/drag to navigate; stays in sync with scroll/zoom.
+- [x] Empty **track lane** between ruler and grid — laid out, column-aligned,
+      reserved for M4. No data. **`render/TrackLaneRenderer.ts`** — a full
+      `Drawable` on the shared rAF loop (built now per the "full painter" choice,
+      not a zero-height seam), sized like the ruler (grid's `1fr` column width ×
+      fixed `TRACK_H`) so M4 drops its consensus/conservation drawing in with the
+      scroll-sync + `colToX` pixel-alignment already wired; in M2 it paints only
+      the chrome bg + bottom separator. Laid out as **row 2** of the now-3×2
+      `.grid-container` (`grid-template-rows: ruler-h track-h 1fr`), with a muted
+      `.grid-track-corner` "tracks" gutter label so the empty lane reads as
+      reserved chrome. `TRACK_H = 18` in `render/chrome.ts`.
+- [x] **Minimap** — whole-alignment overview: a **downsampled aggregate**
+      (non-gap **occupancy** per bucket over the density-tier color, reusing the
+      density reduction) computed **once per load** into a small offscreen canvas
+      (`≤ MAX_AGG_COLS=2048 × MAX_AGG_ROWS=256`), `drawImage`-scaled to fill the
+      strip each frame — **not** a scaled full draw. Per-frame cost is one blit +
+      one rectangle. `render/MinimapLayer.ts` (`Drawable`); pure geometry in
+      **`render/minimap.ts`** (`viewportRectInMinimap` + `minimapToScroll`,
+      round-trip unit-tested in `minimap.test.ts`, 9 tests). Full-shell-width strip
+      below the grid (`MINIMAP_H = 56`, own `ResizeObserver`); the viewport
+      rectangle follows scroll/zoom (Drawable on the rAF loop); **click/drag
+      navigates** (`minimapToScroll` is the exact inverse of the drawn rect → drag
+      round-trips; `store.scrollTo` clamps near-edge targets). Aggregate cache
+      keyed by `AlignmentView` identity (rebuilds on load); `minimap.invalidate()`
+      added to `runEdit`/`applyResynced` for in-place edits (same view object).
+      **NB** the per-load aggregate is a guaranteed O(width×rows) pass on first
+      paint — trivial at the design target, a one-frame hitch at the 10k×10k
+      ceiling (acceptable; the plan sanctions "computed once per load").
 - [x] **Status bar** — pinned bottom strip: `column N · pos M · seq name ·
       residue X` for the hovered cell; gap → "—" for position; never labels the
       gapped width "length" (memo). Pipeline: `ui/hover.ts` `computeHover`

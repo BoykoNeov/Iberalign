@@ -27,14 +27,17 @@ import { GridStore } from "../state/store";
 import { Canvas2DRenderer } from "../render/Canvas2DRenderer";
 import { RulerRenderer } from "../render/RulerRenderer";
 import { NameColumnRenderer } from "../render/NameColumnRenderer";
+import { TrackLaneRenderer } from "../render/TrackLaneRenderer";
+import { MinimapLayer } from "../render/MinimapLayer";
 import { ScrollbarsLayer } from "../render/ScrollbarsLayer";
-import { SelectionLayer } from "../render/SelectionLayer";
 import { layoutScrollbars, scrollForThumbPos, SCROLLBAR_THICKNESS } from "../render/scrollbar";
+import { minimapToScroll } from "../render/minimap";
+import { SelectionLayer } from "../render/SelectionLayer";
 import { RenderLoop } from "../render/loop";
 import { lodFor } from "../render/lod";
 import type { Dims } from "../state/viewport";
 import { DEFAULT_CELL } from "../state/viewport";
-import { NAME_W, RULER_H } from "../render/chrome";
+import { NAME_W, RULER_H, TRACK_H, MINIMAP_H } from "../render/chrome";
 import { computeHover, cellAtPixel, type HoverInfo } from "./hover";
 import StatusBar from "./StatusBar";
 import Toolbar from "./Toolbar";
@@ -66,6 +69,8 @@ import "./Grid.css";
 const CHROME_VARS = {
   "--name-w": `${NAME_W}px`,
   "--ruler-h": `${RULER_H}px`,
+  "--track-h": `${TRACK_H}px`,
+  "--minimap-h": `${MINIMAP_H}px`,
   // The CSS thumb thickness MUST match the geometry constant: `layoutScrollbars`
   // shortens each track by this when both bars show, so the visual bar and the
   // reserved corner gap can't disagree.
@@ -107,6 +112,8 @@ export default function Grid({ view, onResized }: GridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rulerRef = useRef<HTMLCanvasElement>(null);
   const nameRef = useRef<HTMLCanvasElement>(null);
+  const trackRef = useRef<HTMLCanvasElement>(null);
+  const minimapRef = useRef<HTMLCanvasElement>(null);
   const selRef = useRef<HTMLCanvasElement>(null);
   const selBorderRef = useRef<HTMLCanvasElement>(null);
   const vThumbRef = useRef<HTMLDivElement>(null);
@@ -311,6 +318,12 @@ export default function Grid({ view, onResized }: GridProps) {
     const renderer = new Canvas2DRenderer(canvas);
     const ruler = new RulerRenderer(rulerRef.current!);
     const names = new NameColumnRenderer(nameRef.current!);
+    // Empty-in-M2 track lane (consensus/conservation land here in M4) and the
+    // whole-alignment minimap — both `Drawable`s on the same rAF loop, so they
+    // stay frame-synced with the grid under pan/zoom (the minimap's viewport
+    // rectangle follows; the track lane's future tracks scroll-sync for free).
+    const track = new TrackLaneRenderer(trackRef.current!);
+    const minimap = new MinimapLayer(minimapRef.current!);
     // Two canvases: the invert canvas (mix-blend-mode: difference) and the
     // non-blending border canvas stacked above it — SelectionLayer owns and sizes
     // both, so one `selection.resize(...)` below keeps them in lockstep.
@@ -320,13 +333,14 @@ export default function Grid({ view, onResized }: GridProps) {
       () => store.getSelection(),
     );
     const scrollbars = new ScrollbarsLayer(vThumbRef.current!, hThumbRef.current!);
-    // Grid first, then chrome, then the selection overlay, then the scrollbar
-    // thumbs — all updated in one dirty frame, so they never lag the grid under
-    // pan/zoom. (Stacking is by z-index/DOM, not array order; the order just keeps
-    // the selection repainting every dirty frame alongside the grid.)
+    // Grid first, then chrome (ruler / names / track lane / minimap), then the
+    // selection overlay, then the scrollbar thumbs — all updated in one dirty
+    // frame, so they never lag the grid under pan/zoom. (Stacking is by z-index/DOM,
+    // not array order; the order just keeps each layer repainting every dirty frame
+    // alongside the grid.)
     const loop = new RenderLoop(
       store,
-      [renderer, ruler, names, selection, scrollbars],
+      [renderer, ruler, names, track, minimap, selection, scrollbars],
       () => viewRef.current,
     );
     storeRef.current = store;
@@ -365,11 +379,24 @@ export default function Grid({ view, onResized }: GridProps) {
       store.resize(r.width, r.height);
       ruler.resize(r.width, RULER_H, d);
       names.resize(NAME_W, r.height, d);
+      // The track lane shares the grid's `1fr` column → same width, fixed height.
+      track.resize(r.width, TRACK_H, d);
       // Same css w/h/dpr as the grid canvas (it overlays it exactly) — else the
       // selection rectangle drifts a sub-pixel off the cells.
       selection.resize(r.width, r.height, d);
     });
     ro.observe(cell);
+
+    // The minimap spans the FULL shell width (name column + grid), not just the
+    // grid cell, so it gets its own observer. Resize only rescales the blit + the
+    // viewport rectangle — the per-load aggregate is resolution-fixed and survives.
+    const minimapEl = minimapRef.current!;
+    const mro = new ResizeObserver((entries) => {
+      const r = entries[0].contentRect;
+      minimap.resize(r.width, r.height, dpr());
+      store.markDirty();
+    });
+    mro.observe(minimapEl);
 
     // Resolve the cell under a viewport-space cursor (window px) and push it to
     // the readout — but only when the *cell* changes (or grid↔off-grid), so a
@@ -551,9 +578,11 @@ export default function Grid({ view, onResized }: GridProps) {
           v.resizeContents(bytes);
           store.updateDims(v.width, v.numRows);
           // The cell tiers re-read the buffer each draw, but the density tier's
-          // occupancy is memoized by view identity — drop it so a zoom-out after an
-          // edit doesn't show stale bars (the view object is reused in place).
+          // occupancy and the minimap aggregate are memoized by view identity —
+          // drop both so a zoom-out / the overview after an edit don't show stale
+          // bars (the view object is reused in place).
           renderer.invalidateContentCaches();
+          minimap.invalidate();
           store.markDirty();
           // Tell App when the width actually changed so the header readout follows.
           if (v.width !== prevWidth) onResizedRef.current?.(v.width);
@@ -581,6 +610,7 @@ export default function Grid({ view, onResized }: GridProps) {
       v.replaceAll(bytes, names);
       store.updateDims(v.width, v.numRows);
       renderer.invalidateContentCaches();
+      minimap.invalidate();
       store.markDirty();
       if (v.width !== prevWidth) onResizedRef.current?.(v.width);
     };
@@ -978,11 +1008,55 @@ export default function Grid({ view, onResized }: GridProps) {
     hThumb.addEventListener("pointerup", endHThumb);
     hThumb.addEventListener("pointercancel", endHThumb);
 
+    // Minimap navigation. A click jumps the viewport's CENTER to the clicked
+    // content point; a drag scrubs continuously. `minimapToScroll` is the pure
+    // inverse of the rectangle `MinimapLayer` draws (and shares the same minimap
+    // extent), so the "you are here" box tracks the cursor exactly under a drag.
+    // Pointer capture keeps a scrub alive past the strip's edges; `store.scrollTo`
+    // clamps a near-edge target to the nearest reachable scroll.
+    let miniDragging = false;
+    const scrollFromMinimap = (clientX: number, clientY: number) => {
+      const v = viewRef.current;
+      if (!v) return;
+      const r = minimapEl.getBoundingClientRect();
+      const dims: Dims = { cols: v.width, rows: v.numRows };
+      const { x, y } = minimapToScroll(
+        clientX - r.left,
+        clientY - r.top,
+        store.getViewport(),
+        dims,
+        r.width,
+        r.height,
+      );
+      store.scrollTo(x, y);
+    };
+    const onMinimapDown = (e: PointerEvent) => {
+      if (e.button !== 0 || !viewRef.current) return;
+      e.preventDefault();
+      miniDragging = true;
+      minimapEl.setPointerCapture(e.pointerId);
+      scrollFromMinimap(e.clientX, e.clientY);
+    };
+    const onMinimapMove = (e: PointerEvent) => {
+      if (!miniDragging) return;
+      scrollFromMinimap(e.clientX, e.clientY);
+    };
+    const endMinimap = (e: PointerEvent) => {
+      if (!miniDragging) return;
+      miniDragging = false;
+      if (minimapEl.hasPointerCapture(e.pointerId)) minimapEl.releasePointerCapture(e.pointerId);
+    };
+    minimapEl.addEventListener("pointerdown", onMinimapDown);
+    minimapEl.addEventListener("pointermove", onMinimapMove);
+    minimapEl.addEventListener("pointerup", endMinimap);
+    minimapEl.addEventListener("pointercancel", endMinimap);
+
     loop.start();
 
     return () => {
       loop.stop();
       ro.disconnect();
+      mro.disconnect();
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("pointerdown", onPointerDown);
@@ -999,9 +1073,15 @@ export default function Grid({ view, onResized }: GridProps) {
       hThumb.removeEventListener("pointermove", onHThumbMove);
       hThumb.removeEventListener("pointerup", endHThumb);
       hThumb.removeEventListener("pointercancel", endHThumb);
+      minimapEl.removeEventListener("pointerdown", onMinimapDown);
+      minimapEl.removeEventListener("pointermove", onMinimapMove);
+      minimapEl.removeEventListener("pointerup", endMinimap);
+      minimapEl.removeEventListener("pointercancel", endMinimap);
       renderer.dispose();
       ruler.dispose();
       names.dispose();
+      track.dispose();
+      minimap.dispose();
       selection.dispose();
       store.setSelectionListener(undefined);
       storeRef.current = null;
@@ -1068,6 +1148,13 @@ export default function Grid({ view, onResized }: GridProps) {
       <div className="grid-container" style={CHROME_VARS}>
         <div className="grid-corner" />
         <canvas ref={rulerRef} className="grid-ruler" />
+        {/* Track lane (row 2): a left gutter label + the column-aligned lane
+            canvas. Empty in M2 (TrackLaneRenderer paints only chrome); M4 fills it
+            with the consensus row / conservation track. */}
+        <div className="grid-track-corner" aria-hidden="true">
+          tracks
+        </div>
+        <canvas ref={trackRef} className="grid-track" />
         <canvas ref={nameRef} className="grid-names" />
         <div
           className="grid-canvas-cell"
@@ -1090,6 +1177,13 @@ export default function Grid({ view, onResized }: GridProps) {
           <div ref={hThumbRef} className="grid-scrollbar grid-scrollbar-h" />
         </div>
       </div>
+      {/* Whole-alignment minimap strip (full shell width). Painted by MinimapLayer
+          on the rAF loop; click/drag navigates (handlers in the mount effect). */}
+      <canvas
+        ref={minimapRef}
+        className="grid-minimap"
+        aria-label="Alignment minimap — click or drag to navigate"
+      />
       <StatusBar hover={hover} zoom={zoom} onZoomTo={handleZoomTo} />
     </div>
   );

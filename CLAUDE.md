@@ -97,8 +97,28 @@ dependency-light and surface toolchain/linker issues fast.
   `b8664e2`, user-confirmed): arrows/Page/Home/End + Ctrl/⌘+Home/End reach the
   last row/col; macOS-style overlay thumbs (pure round-trip-tested geometry in
   `render/scrollbar.ts` + a `ScrollbarsLayer` `Drawable`); `viewport.ts` gained
-  the `scrollTo` clamped absolute-scroll reducer. Remaining: track lane, minimap.
-  Plan/context/tasks in `docs/plans/m2-*`.
+  the `scrollTo` clamped absolute-scroll reducer. **Track lane + minimap — code
+  complete + green; GUI smoke pending.** The last two M2 rendering items, both
+  `Drawable`s on the shared rAF loop. **Track lane** (`render/TrackLaneRenderer.ts`):
+  a FULL painter built now (user chose "full painter" over a zero-height seam) —
+  empty in M2 (paints only chrome bg + bottom separator), but sized like the ruler
+  (grid `1fr` width × `TRACK_H` 18px) so M4 drops consensus/conservation in with
+  scroll-sync + `colToX` pixel-alignment already wired; laid out as **row 2** of a
+  now-3×2 `.grid-container` with a muted "tracks" gutter label. **Minimap**
+  (`render/MinimapLayer.ts`): a whole-alignment overview = a **downsampled
+  occupancy aggregate** (non-gap fraction per bucket over the density color, the
+  same reduction the density LOD tier uses) built **once per load** into a small
+  offscreen canvas (`≤2048×256`) and `drawImage`-scaled to fill the strip each
+  frame — NOT a scaled full draw, so per-frame cost is one blit + one rect. Pure
+  geometry in `render/minimap.ts` (`viewportRectInMinimap` + `minimapToScroll`,
+  round-trip unit-tested, 9 tests); full-shell-width strip below the grid
+  (`MINIMAP_H` 56px, own `ResizeObserver`); the "you are here" rectangle follows
+  scroll/zoom and **click/drag navigates** (`minimapToScroll` is the exact inverse
+  of the drawn rect; `store.scrollTo` clamps). Aggregate cache keyed by
+  `AlignmentView` identity (rebuilds on load); `minimap.invalidate()` wired into
+  `runEdit`/`applyResynced` for in-place edits. Device-px (draw) vs CSS-px
+  (interaction) kept internally consistent via ratio geometry. Plan/context/tasks
+  in `docs/plans/m2-*`.
 - **Selection (M5 slice) — code complete + green; GUI smoke PASSED, committed.**
   Spreadsheet-style cursor + rectangular selection (click selects; **left-drag
   rubber-bands a rect**; arrows move the cursor with the view scroll-following;
