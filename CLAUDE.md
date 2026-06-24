@@ -98,7 +98,8 @@ dependency-light and surface toolchain/linker issues fast.
   last row/col; macOS-style overlay thumbs (pure round-trip-tested geometry in
   `render/scrollbar.ts` + a `ScrollbarsLayer` `Drawable`); `viewport.ts` gained
   the `scrollTo` clamped absolute-scroll reducer. **Track lane + minimap — code
-  complete + green; GUI smoke pending.** The last two M2 rendering items, both
+  complete + green; GUI smoke PASSED (2026-06-24, user "all works"); committed
+  `6b6f8b5`, CI green — M2 COMPLETE.** The last two M2 rendering items, both
   `Drawable`s on the shared rAF loop. **Track lane** (`render/TrackLaneRenderer.ts`):
   a FULL painter built now (user chose "full painter" over a zero-height seam) —
   empty in M2 (paints only chrome bg + bottom separator), but sized like the ruler

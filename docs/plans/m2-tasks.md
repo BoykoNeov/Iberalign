@@ -22,8 +22,11 @@ confirmed in source — see "Verify + wrap"). A **zoom indicator** (status-bar
 overlay scrollbars** landed and green (committed `b8664e2`, user-confirmed
 working at `tauri dev`). **Track lane + minimap** are landed and green
 (typecheck / 181 vitest / build clean; `TrackLaneRenderer` + `MinimapLayer`
-Drawables, pure `minimap.ts` geometry round-trip-tested) — **GUI smoke pending**
-(human at `tauri dev`), then the M2 batch-end ritual closes the milestone.
+Drawables, pure `minimap.ts` geometry round-trip-tested), committed `6b6f8b5`,
+CI green. **GUI smoke PASSED** (human at `tauri dev`, 2026-06-24, user "all
+works"): track-lane chrome strip renders column-aligned between ruler and grid;
+minimap shows the occupancy overview with the "you are here" rectangle tracking
+pan/zoom and click/drag navigating; no regressions. **M2 is complete.**
 
 **Done when** (spec §12): a thousands×thousands fixture scrolls smoothly
 (≥ ~45–60 fps) with no DOM-per-cell and no per-frame IPC.
@@ -255,8 +258,9 @@ Drawables, pure `minimap.ts` geometry round-trip-tested) — **GUI smoke pending
       - **no per-frame IPC** — watch the IPC log; load should be the only call.
       - **no DOM-per-cell** — inspect the DOM: one `<canvas>` (+ chrome canvases),
         not N elements.
-- [ ] Batch-end ritual: update `m2-*` docs + `CLAUDE.md` milestone status +
-      memory; commit (Conventional Commits) + push; CI green on both jobs.
+- [x] Batch-end ritual: updated `m2-*` docs + `CLAUDE.md` milestone status +
+      memory; committed (`6b6f8b5`) + pushed; CI green on both jobs; GUI smoke
+      PASSED (2026-06-24) → recorded in a follow-up `docs:` commit. **M2 done.**
 
 ## Deferred (not M2)
 
