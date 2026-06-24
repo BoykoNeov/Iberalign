@@ -16,3 +16,18 @@ export function parseClipboard(text: string): string[] {
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
+
+/**
+ * Whether the clipboard looks like FASTA — the first non-blank line starts with
+ * `>`. Routes the paste: FASTA ⇒ insert as NEW sequences (names from the headers,
+ * parsed in Rust); otherwise ⇒ a raw block paste into the selected cells. The
+ * check is load-bearing (only FASTA text is fed to the Rust FASTA parser), but a
+ * single header line is a strong, cheap signal.
+ */
+export function looksLikeFasta(text: string): boolean {
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    return line.startsWith(">");
+  }
+  return false;
+}

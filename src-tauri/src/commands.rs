@@ -3,7 +3,7 @@
 //! serializable DTOs so the engine types stay UI-agnostic.
 
 use crate::state::AppState;
-use align_core::{Alphabet, CellWrite, Dataset, EditCmd, RowSplice};
+use align_core::{Alphabet, CellWrite, Dataset, EditCmd, RawRecord, RowData, RowSplice, SeqId};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
@@ -194,35 +194,80 @@ fn gap_fill_writes(r0: usize, r1: usize, c0: usize, c1: usize) -> Vec<CellWrite>
         .collect()
 }
 
-/// Overwrite writes pasting `rows` (residue lines) with the block's top-left at
-/// `(r0, c0)`, CLAMPED to the alignment: lines past the last row are dropped and
-/// each line is truncated to the columns remaining from `c0`. Width-preserving —
-/// it reuses `SetCells`, so paste-overwrite rides the same in-place transport as
-/// delete; growing the alignment to fit an oversized block is a later (insert)
-/// batch. An empty line writes nothing (its row is left unchanged), so internal
-/// blank lines in the block hold their row position.
-fn paste_overwrite_writes(ds: &Dataset, r0: usize, c0: usize, rows: &[String]) -> Vec<CellWrite> {
+/// The edit command for a paste-OVERWRITE with the block's top-left at `(r0, c0)`:
+/// each residue line overwrites the cells starting at column `c0` of its row.
+/// Lines past the last row are dropped (an overwrite never adds rows). The block
+/// **never truncates horizontally** — if it runs past the right edge the alignment
+/// GROWS to fit (existing cells past the overwrite are kept, other rows trailing-
+/// padded); a block that fits leaves the width unchanged. An empty line overwrites
+/// nothing (its row holds its position).
+///
+/// Two shapes by whether it overflows the right edge:
+///   - fits (`needed <= width`) ⇒ in-place [`EditCmd::SetCells`] on the target rows
+///     only (width-preserving — rides the fast in-place transport);
+///   - overflows ⇒ [`EditCmd::SpliceRows`] over EVERY row, replacing each row's tail
+///     `[c0..width]` with a `needed - c0`-long tail (target rows overwrite their
+///     front; all rows pad to the grown width), so all rows stay equal-width.
+fn paste_overwrite_cmd(ds: &Dataset, r0: usize, c0: usize, rows: &[String]) -> EditCmd {
     let num_rows = ds.alignment.num_rows();
-    let avail = ds.alignment.width.saturating_sub(c0);
-    rows.iter()
+    let old_width = ds.alignment.width;
+    // Widest reach of any KEPT line; at least the current width (so it can only grow).
+    let needed = rows
+        .iter()
         .enumerate()
-        .filter_map(|(i, line)| {
-            let row = r0 + i;
-            if row >= num_rows {
-                return None;
-            }
-            let mut bytes = line.as_bytes().to_vec();
-            bytes.truncate(avail);
-            if bytes.is_empty() {
-                return None;
-            }
-            Some(CellWrite {
+        .filter(|(i, _)| r0 + i < num_rows)
+        .map(|(_, line)| c0 + line.len())
+        .max()
+        .map(|m| m.max(old_width))
+        .unwrap_or(old_width);
+
+    if needed <= old_width {
+        // Fits: overwrite the target rows in place (no truncation — every kept line
+        // ends at or before the right edge). Blank lines write nothing.
+        let writes = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                let row = r0 + i;
+                if row >= num_rows || line.is_empty() {
+                    return None;
+                }
+                Some(CellWrite {
+                    row,
+                    col: c0,
+                    bytes: line.as_bytes().to_vec(),
+                })
+            })
+            .collect();
+        return EditCmd::SetCells { writes };
+    }
+
+    // Overflow: grow to `needed`. Each row replaces its tail `[c0..old_width]` with a
+    // fresh `tail_len`-long tail: keep the old cells from `c0`, overwrite the front
+    // with this row's line (if any), and pad the grown remainder with gaps.
+    let tail_len = needed - c0;
+    let splices = (0..num_rows)
+        .map(|row| {
+            let old = &ds.alignment.rows[row].gapped;
+            let line: &[u8] = if row >= r0 && row - r0 < rows.len() {
+                rows[row - r0].as_bytes()
+            } else {
+                &[]
+            };
+            let mut tail = vec![b'-'; tail_len];
+            // Keep the old cells from c0 onward, then overwrite the front with this
+            // row's line; the grown remainder stays gaps.
+            tail[..old_width - c0].copy_from_slice(&old[c0..old_width]);
+            tail[..line.len()].copy_from_slice(line);
+            RowSplice {
                 row,
                 col: c0,
-                bytes,
-            })
+                remove: old_width - c0,
+                bytes: tail,
+            }
         })
-        .collect()
+        .collect();
+    EditCmd::SpliceRows { splices }
 }
 
 /// Splices for a paste-INSERT with the block's top-left at `(r0, c0)`. Each target
@@ -317,12 +362,13 @@ pub async fn clear_cells(
 }
 
 /// Paste a block of residue lines over the alignment with its top-left at
-/// `(r0, c0)`, in OVERWRITE mode (in place; the block is clamped to bounds — see
-/// [`paste_overwrite_writes`]). Returns the post-edit render buffer (empty ⇒
-/// no-op), reversible through the edit history like every mutation. The frontend
-/// reads + parses the system clipboard into `rows`; the width-changing insert
-/// modes land in later batches. Errors if nothing is loaded or the rect is out of
-/// bounds (atomic — state untouched on error).
+/// `(r0, c0)`, in OVERWRITE mode (see [`paste_overwrite_cmd`]): cells are
+/// overwritten in place, rows past the end are dropped, and the alignment GROWS to
+/// fit a block that runs past the right edge (never truncates). Returns the
+/// post-edit render buffer (empty ⇒ no-op) — possibly WIDER, so the frontend
+/// derives the new width from the buffer length, same as paste-insert. Reversible
+/// through the edit history like every mutation. The frontend reads + parses the
+/// system clipboard into `rows`. Errors if nothing is loaded (atomic on error).
 #[tauri::command]
 pub async fn paste_overwrite(
     r0: usize,
@@ -337,10 +383,8 @@ pub async fn paste_overwrite(
     let ds = dataset
         .as_mut()
         .ok_or_else(|| "no alignment loaded".to_string())?;
-    let writes = paste_overwrite_writes(ds, r0, c0, &rows);
-    let changed = history
-        .apply(ds, EditCmd::SetCells { writes })
-        .map_err(|e| e.to_string())?;
+    let cmd = paste_overwrite_cmd(ds, r0, c0, &rows);
+    let changed = history.apply(ds, cmd).map_err(|e| e.to_string())?;
     Ok(tauri::ipc::Response::new(edit_bytes(ds, &changed)))
 }
 
@@ -373,6 +417,105 @@ pub async fn paste_insert(
         .apply(ds, EditCmd::SpliceRows { splices })
         .map_err(|e| e.to_string())?;
     Ok(tauri::ipc::Response::new(edit_bytes(ds, &changed)))
+}
+
+/// Outcome of [`paste_sequences`]: how many rows were inserted and how many of
+/// them had to be truncated to the alignment width (clamp + warn — see
+/// [`paste_sequences_rows`]). Small JSON; the frontend re-fetches the meta +
+/// render buffer to rebuild its view (a row-count change reuses the load path).
+#[derive(Serialize)]
+pub struct PasteSeqDto {
+    pub inserted: usize,
+    pub truncated: usize,
+}
+
+/// The next free [`SeqId`]: one past the current maximum (or 0 for an empty set).
+/// Fresh ids never collide with existing rows even after deletes.
+fn next_seq_id(ds: &Dataset) -> SeqId {
+    ds.sequences
+        .iter()
+        .map(|s| s.id)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0)
+}
+
+/// Build the [`RowData`] to insert as new sequences, plus the count truncated.
+/// Each record's gapped stream is padded/truncated to the alignment width (trailing
+/// gaps if short, cut if longer — clamp + warn, the grow-to-fit variant is a later
+/// follow-up). An empty alignment adopts the records' widest length. Fresh,
+/// non-colliding ids are assigned in record order.
+fn paste_sequences_rows(ds: &Dataset, records: &[RawRecord]) -> (Vec<RowData>, usize) {
+    if records.is_empty() {
+        return (Vec::new(), 0);
+    }
+    let width = if ds.alignment.num_rows() > 0 {
+        ds.alignment.width
+    } else {
+        records.iter().map(|r| r.gapped.len()).max().unwrap_or(0)
+    };
+    let mut next = next_seq_id(ds);
+    let mut truncated = 0usize;
+    let rows = records
+        .iter()
+        .map(|rec| {
+            if rec.gapped.len() > width {
+                truncated += 1;
+            }
+            let mut gapped = rec.gapped.clone();
+            gapped.resize(width, b'-'); // pad short / truncate long → exactly `width`
+            let id = next;
+            next += 1;
+            RowData {
+                id,
+                name: rec.name.clone(),
+                description: rec.description.clone(),
+                gapped,
+            }
+        })
+        .collect();
+    (rows, truncated)
+}
+
+/// Paste FASTA from the clipboard as NEW sequences inserted at row index `at`
+/// (existing rows shift down). `text` is the raw clipboard string — parsed in Rust
+/// by the tolerant [`align_core::parse_fasta`] (joins wrapped lines, normalizes
+/// `.`→`-`, keeps gaps, disambiguates duplicate names), so wrapped external FASTA
+/// works too. Each sequence is clamped to the alignment width (trailing gaps /
+/// truncation; the count is reported so the UI can warn). Reversible through the
+/// edit history. Returns a small JSON [`PasteSeqDto`]; the frontend re-syncs its
+/// view from `get_alignment_meta` + `get_render_buffer` (a row-count change reuses
+/// the load path). Errors if nothing is loaded.
+#[tauri::command]
+pub async fn paste_sequences(
+    at: usize,
+    text: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<PasteSeqDto, String> {
+    let out = align_core::parse_fasta(text.as_bytes()).map_err(|e| e.to_string())?;
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let (rows, truncated) = paste_sequences_rows(ds, &out.records);
+    let inserted = rows.len();
+    if inserted == 0 {
+        return Ok(PasteSeqDto {
+            inserted: 0,
+            truncated: 0,
+        });
+    }
+    let at = at.min(ds.alignment.num_rows()); // clamp a stale anchor to an append
+    history
+        .apply(ds, EditCmd::InsertRows { at, rows })
+        .map_err(|e| e.to_string())?;
+    Ok(PasteSeqDto {
+        inserted,
+        truncated,
+    })
 }
 
 /// Undo the most recent edit; returns the post-edit render buffer (empty when
@@ -478,44 +621,68 @@ mod tests {
     }
 
     #[test]
-    fn paste_overwrite_writes_clamps_to_bounds() {
-        // A 3-line block dropped at (0,2) of a 2×4 alignment: the 3rd line is past
-        // the last row (dropped) and each line truncates to width-c0 = 2 columns.
+    fn paste_overwrite_fits_overwrites_in_place() {
+        // A block that fits within the width overwrites the target rows in place —
+        // a SetCells, no width change. The 3rd line is past the last row (dropped).
         let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
-        let rows = vec!["XXXX".to_string(), "YY".to_string(), "ZZZZ".to_string()];
-        let writes = paste_overwrite_writes(&ds, 0, 2, &rows);
-        assert_eq!(
-            writes,
-            vec![
-                CellWrite {
-                    row: 0,
-                    col: 2,
-                    bytes: b"XX".to_vec()
-                },
-                CellWrite {
-                    row: 1,
-                    col: 2,
-                    bytes: b"YY".to_vec()
-                },
-            ]
-        );
+        let rows = vec!["XX".to_string(), "YY".to_string(), "ZZ".to_string()];
+        match paste_overwrite_cmd(&ds, 0, 2, &rows) {
+            EditCmd::SetCells { writes } => assert_eq!(
+                writes,
+                vec![
+                    CellWrite {
+                        row: 0,
+                        col: 2,
+                        bytes: b"XX".to_vec()
+                    },
+                    CellWrite {
+                        row: 1,
+                        col: 2,
+                        bytes: b"YY".to_vec()
+                    },
+                ]
+            ),
+            other => panic!("expected SetCells, got {other:?}"),
+        }
     }
 
     #[test]
-    fn paste_overwrite_writes_skips_empty_lines() {
-        // A blank line writes nothing (its row is left as-is); the row index still
-        // advances so the next line lands on the right row.
+    fn paste_overwrite_fits_skips_empty_lines() {
+        // A blank line overwrites nothing (its row is left as-is); the row index
+        // still advances so the next line lands on the right row.
         let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
         let rows = vec!["".to_string(), "GG".to_string()];
-        let writes = paste_overwrite_writes(&ds, 0, 0, &rows);
-        assert_eq!(
-            writes,
-            vec![CellWrite {
-                row: 1,
-                col: 0,
-                bytes: b"GG".to_vec()
-            }]
-        );
+        match paste_overwrite_cmd(&ds, 0, 0, &rows) {
+            EditCmd::SetCells { writes } => assert_eq!(
+                writes,
+                vec![CellWrite {
+                    row: 1,
+                    col: 0,
+                    bytes: b"GG".to_vec()
+                }]
+            ),
+            other => panic!("expected SetCells, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paste_overwrite_grows_past_right_edge_and_undo_restores() {
+        // A line reaching past the right edge GROWS the alignment (never truncates):
+        // overwrite "XXXX" at col 2 of width 4 → needs width 6. Row 0's old cells
+        // past the overwrite are kept where they still fit; the other row trailing-
+        // pads to stay equal-width.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let cmd = paste_overwrite_cmd(&ds, 0, 2, &["XXXX".to_string()]);
+        assert!(matches!(cmd, EditCmd::SpliceRows { .. }));
+        let changed = history.apply(&mut ds, cmd).unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(ds.alignment.width, 6);
+        // Row 0: "AC" + "XXXX" = "ACXXXX"; row 1: "TTTT" padded → "TTTT--".
+        assert_eq!(flatten_buffer(&ds), b"ACXXXXTTTT--");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
     }
 
     #[test]
@@ -571,18 +738,64 @@ mod tests {
     #[test]
     fn paste_overwrite_through_history_and_undo() {
         // The edit path `paste_overwrite` runs, minus the Tauri State plumbing:
-        // build clamped writes, apply through the history, confirm the buffer and
-        // that undo restores it.
+        // build the overwrite command (fits ⇒ SetCells), apply through the history,
+        // confirm the buffer and that undo restores it.
         let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
         let mut history = align_core::EditStack::new();
         let rows = vec!["GG".to_string(), "CC".to_string()];
-        let writes = paste_overwrite_writes(&ds, 0, 1, &rows);
-        let changed = history
-            .apply(&mut ds, align_core::EditCmd::SetCells { writes })
-            .unwrap();
+        let cmd = paste_overwrite_cmd(&ds, 0, 1, &rows);
+        let changed = history.apply(&mut ds, cmd).unwrap();
         assert!(!changed.is_empty());
         assert_eq!(flatten_buffer(&ds), b"AGGTTCCT");
         history.undo(&mut ds).unwrap();
         assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn paste_sequences_rows_clamps_to_width_and_counts_truncated() {
+        // Into a width-4 alignment: a short record pads with trailing gaps, a long
+        // one truncates (and counts), and fresh ids continue past the max existing.
+        let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let records = [rec("short", "GG"), rec("long", "CCCCCC")];
+        let (rows, truncated) = paste_sequences_rows(&ds, &records);
+        assert_eq!(truncated, 1);
+        assert_eq!(
+            rows,
+            vec![
+                RowData {
+                    id: 2,
+                    name: "short".to_string(),
+                    description: String::new(),
+                    gapped: b"GG--".to_vec(), // padded to width 4
+                },
+                RowData {
+                    id: 3,
+                    name: "long".to_string(),
+                    description: String::new(),
+                    gapped: b"CCCC".to_vec(), // truncated to width 4
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn paste_sequences_rows_empty_alignment_adopts_record_width() {
+        // With no rows yet, the inserted sequences establish the width (the widest).
+        let ds = Dataset::default();
+        let records = [rec("a", "ACG"), rec("b", "TTTTT")];
+        let (rows, truncated) = paste_sequences_rows(&ds, &records);
+        assert_eq!(truncated, 0);
+        assert_eq!(rows[0].gapped, b"ACG--"); // padded to the widest (5)
+        assert_eq!(rows[1].gapped, b"TTTTT");
+        assert_eq!(rows[0].id, 0);
+        assert_eq!(rows[1].id, 1);
+    }
+
+    #[test]
+    fn paste_sequences_rows_empty_records_is_noop() {
+        let ds = Dataset::from_records(&[rec("a", "ACGT")]);
+        let (rows, truncated) = paste_sequences_rows(&ds, &[]);
+        assert!(rows.is_empty());
+        assert_eq!(truncated, 0);
     }
 }

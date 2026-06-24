@@ -137,6 +137,59 @@ capture collapses both into one symmetric primitive. **Why real `WidthMismatch` 
 it guards genuine data corruption (a wrong `width` over differing-length rows), so it must
 survive release builds — unlike the one-per-row guard, which is a pure caller-contract.
 
+## Batch C5 (paste FASTA as new sequences + Insert|Overwrite toggle) — files
+
+Two user asks, one batch (advisor-reviewed before building). The FIRST row-COUNT-changing
+edit — so it reuses the LOAD path for transport, not a bespoke names+buffer channel.
+
+**Engine (`crates/align-core`)**
+- `edit.rs` — `RowData { id, name, description, gapped }`; `EditCmd::InsertRows { at, rows }`
+  / `DeleteRows { at, count }` (Dataset-level — they add/remove both an `AlignedRow` and its
+  derived `Sequence`). `apply_to_dataset` now DISPATCHES: structural commands → `insert_rows`
+  / `delete_rows` (own the whole `Dataset`, NO matrix `apply` + NO residue-resync loop);
+  matrix commands → the old `apply` + resync. Symmetric inverse (Insert↔Delete; delete
+  captures rows verbatim so redo restores ids/names). `apply(&mut Alignment, …)` gets an
+  `unreachable!` arm for the structural variants (routing guard). Width: new rows must equal
+  the alignment width; an EMPTY alignment adopts the inserted width. 8 new tests. `lib.rs`
+  re-exports `RowData`.
+
+**Command (`src-tauri`)**
+- `commands.rs` — `paste_sequences(at, text)` → `PasteSeqDto { inserted, truncated }` (JSON,
+  NOT a buffer — the row count changed, so the frontend re-syncs via the load path). Helpers
+  `paste_sequences_rows` (clamp/pad to width, count truncated, fresh ids via `next_seq_id`)
+  + `next_seq_id`. **`paste_overwrite` rewritten** from clamp/truncate → **grow-to-fit**
+  (`paste_overwrite_cmd`: `SetCells` when the block fits, `SpliceRows` when it runs past the
+  right edge). 4 new/updated tests. `lib.rs` registers `paste_sequences`.
+
+**Frontend**
+- `model/view.ts` — `replaceAll(bytes, names)`: reassigns buffer + width + **numRows +
+  names** on the SAME view object (row count from `names.length`, width derived against
+  THAT). Distinct from `resizeContents` (numRows fixed). `view.test.ts` +4.
+- `model/paste.ts` — `looksLikeFasta(text)` (first non-blank line starts `>`). `paste.test.ts`
+  +2. NB **reconciles the old "FASTA ⇒ strip headers" note**: `parseClipboard` still strips
+  `>` for the RAW path, but FASTA now ROUTES to `paste_sequences` (names kept) BEFORE
+  `parseClipboard` runs — so a FASTA copy becomes new sequences, not column-spliced residues.
+- `ipc/edit.ts` — `pasteSequences(at, text)` (JSON, not `editBuffer`); `pasteOverwrite` doc
+  updated (grow-to-fit). `ipc/commands.ts` — reuses existing `getAlignmentMeta` /
+  `getRenderBuffer` for the re-sync.
+- `ui/Grid.tsx` — `pasteMode` state + ref (Insert|Overwrite, default Insert); `showMsg(text,
+  tone)`; effect-scoped `applyResynced` (replaceAll + updateDims + repaint), `runResyncEdit`
+  (undo/redo — **the landmine fix**: full meta+buffer re-sync since a generic undo/redo can
+  flip the row count), `pasteFasta` (insert new seqs, select the block), `pasteRawBlock`
+  (insert|overwrite via `runEdit`), `doPaste` (reads clipboard once, routes on
+  `looksLikeFasta`). `ui/Toolbar.tsx` — `PasteMode` type + Insert|Overwrite toggle; `message`
+  prop → `{text, tone}`. `ui/Toolbar.css` — `.toolbar-msg.warn` (bold red, light + dark).
+
+**Transport decision:** a structural edit IS a load (new row set + names), so re-sync via
+`get_alignment_meta` + `get_render_buffer` + `replaceAll` rather than inventing a combined
+names+buffer transport. Matrix edits keep the fast buffer-only `runEdit` path. **The
+landmine:** once any edit changes the row count, the generic `undo_edit`/`redo_edit` can flip
+numRows — deriving `width = bytes.len/numRows` against a stale numRows silently corrupts the
+render — so undo/redo MUST re-sync authoritative dims+names (verify in the GUI smoke).
+
+**Deferred:** grow-to-fit for paste-as-sequences (today: clamp to width + warn on truncate);
+alphabet-mismatch warning; the within-insert shift-all toggle (C3).
+
 ## Seams for Batches C–D (paste/cut, building on the B foundation)
 
 - `crates/align-core/src/edit.rs` — `EditCmd` enum (variants: InsertGap, DeleteGap,

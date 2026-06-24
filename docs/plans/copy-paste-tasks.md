@@ -112,11 +112,41 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       insert (shift-only), selects the inserted block, messages dropped overflow rows.
       Verify: align-core 17 (+5 splice) ✓, iberalign 11 (+3 paste_insert) ✓, clippy/fmt
       ✓, typecheck ✓, 160 vitest ✓, build ✓.
+- [x] **C5** Paste FASTA as NEW sequences + Insert|Overwrite toggle ✅ (code complete +
+      green; GUI smoke pending). Two user asks landed together:
+      - **FASTA paste ⇒ insert new sequences** (not splice residues into existing rows).
+        New Dataset-level engine commands `EditCmd::InsertRows { at, rows: Vec<RowData> }`
+        / `DeleteRows { at, count }` (symmetric inverse like `SpliceRows`; ids/names
+        captured for a lossless round-trip), dispatched in `apply_to_dataset` (structural
+        — they own the whole `Dataset`, skip the matrix `apply` + residue-resync). Rust
+        `paste_sequences(at, text)` parses via the tolerant `parse_fasta` (wrapped FASTA,
+        dup names free), clamps each seq to the alignment width (**warn** on truncate,
+        grow-to-fit deferred), fresh non-colliding ids, returns a small JSON
+        `PasteSeqDto{inserted, truncated}`. Frontend routes on `looksLikeFasta` (first
+        non-blank line `>`); inserts at the selection top (append if none); re-syncs the
+        view from `getAlignmentMeta` + `getRenderBuffer` via new
+        `AlignmentView.replaceAll(bytes, names)` (row-count + names + width on the SAME
+        object). **Landmine fixed:** undo/redo now go through the resync path
+        (`runResyncEdit`) — a generic undo/redo can reverse a row-count change, and
+        deriving width from a fixed numRows would corrupt the render.
+      - **Insert | Overwrite toggle** (default Insert; the user pulled C4's toggle forward).
+        Raw block paste routes on `pasteMode`. **Overwrite rewritten to GROW-to-fit**
+        (`paste_overwrite_cmd`: `SetCells` when the block fits, `SpliceRows` when it runs
+        past the right edge — never truncates horizontally; rows past the bottom dropped).
+      Verify: align-core 25 (+8), iberalign 15 (+4), clippy/fmt ✓, typecheck ✓, 166 vitest
+      (+6) ✓, build ✓.
 - [ ] **C3** Paste insert, shift-all toggle — **engine already done** (the `shift_all`
-      flag + tests); this is the toolbar toggle wiring only.
-- [ ] **C4** FASTA auto-detect; alphabet warn; size-guard; multi-row geometry;
-      Insert|Overwrite + shift-mode toggle buttons in the toolbar (re-wires C1's
-      `pasteOverwrite`, which stays in `ipc/edit.ts` ready for the toggle).
+      flag + tests); this is the toolbar toggle wiring only. (Still future — C5 added the
+      Insert|Overwrite toggle, NOT the within-insert shift-only|shift-all toggle.)
+- [ ] **C4** (mostly absorbed by C5) remaining: alphabet warn on paste; paste size-guard;
+      **grow-to-fit for paste-as-sequences** (today: clamp + warn). The Insert|Overwrite
+      buttons + FASTA auto-detect landed in C5.
+
+## Messages — info/warn tone ✅ (this batch)
+
+- [x] `showMsg(text, tone)`; `warn` (failures / dropped / truncated) → **bold red**, lingers
+      ~4.5s; `info` (copied / inserted) plain, ~2.5s. `Toolbar` `message` prop → `{text,
+      tone}`; `.toolbar-msg.warn` styling (light + dark). All call sites tagged.
 
 ## Batch D — Cut
 

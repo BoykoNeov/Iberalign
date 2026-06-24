@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseClipboard } from "./paste";
+import { looksLikeFasta, parseClipboard } from "./paste";
 
 describe("parseClipboard", () => {
   it("splits raw residue lines", () => {
@@ -21,5 +21,19 @@ describe("parseClipboard", () => {
   it("treats empty or all-blank text as no lines", () => {
     expect(parseClipboard("")).toEqual([]);
     expect(parseClipboard("\n\n")).toEqual([]);
+  });
+});
+
+describe("looksLikeFasta", () => {
+  it("is true when the first non-blank line is a header", () => {
+    expect(looksLikeFasta(">a\nACGT")).toBe(true);
+    expect(looksLikeFasta("\n\n  \n>a\nACGT")).toBe(true); // leading blanks skipped
+  });
+
+  it("is false for a raw residue block", () => {
+    expect(looksLikeFasta("ACGT\nTTTT")).toBe(false);
+    expect(looksLikeFasta("")).toBe(false);
+    // A `>` only mid-block (not the first non-blank line) is NOT FASTA.
+    expect(looksLikeFasta("ACGT\n>a\nTTTT")).toBe(false);
   });
 });

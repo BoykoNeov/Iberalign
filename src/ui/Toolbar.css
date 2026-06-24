@@ -88,7 +88,8 @@
   color: #ffffff;
 }
 
-/* Ephemeral feedback, pinned right. */
+/* Ephemeral feedback, pinned right. A `warn` message (failure / dropped /
+ * truncated) is bold red so it stands out; the default `info` tone is quiet. */
 .toolbar-msg {
   flex: 0 1 auto;
   margin-left: auto;
@@ -96,6 +97,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: #4a4f55;
+}
+
+.toolbar-msg.warn {
+  color: #c92a2a;
+  font-weight: 700;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -136,5 +142,8 @@
   }
   .toolbar-msg {
     color: #b9bdc2;
+  }
+  .toolbar-msg.warn {
+    color: #ff8585;
   }
 }

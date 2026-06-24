@@ -87,4 +87,38 @@ export class AlignmentView {
     this.buffer = bytes;
     this.meta = { ...this.meta, width: bytes.length / this.numRows };
   }
+
+  /**
+   * Swap in a post-edit buffer whose ROW COUNT and NAMES may have changed (a
+   * structural edit — paste-as-sequences, and the undo/redo that reverses one).
+   * The authoritative row count comes from `names.length` (Rust just sent them);
+   * the new width is derived against THAT, not the stale `numRows`. Reassigns
+   * `buffer` + `meta` (width, numRows, names) on THIS view object — same identity,
+   * so the renderer's ref and App's `view` prop stay valid and Grid's `[view]`
+   * effect doesn't re-fire; the caller updates the store dims (`updateDims`) and
+   * repaints. Throws if the length isn't a whole number of `names.length` rows.
+   *
+   * Distinct from {@link resizeContents}, which keeps `numRows` fixed (matrix
+   * edits): once an edit can change the row count, deriving width from a fixed
+   * `numRows` would be silently wrong — so structural edits route here.
+   */
+  replaceAll(bytes: Uint8Array, names: string[]): void {
+    const numRows = names.length;
+    if (numRows === 0) {
+      if (bytes.length !== 0) {
+        throw new Error(`render buffer length ${bytes.length} for a 0-row alignment`);
+      }
+      this.buffer = bytes;
+      this.meta = { ...this.meta, width: 0, numRows: 0, names };
+      return;
+    }
+    if (bytes.length % numRows !== 0) {
+      throw new Error(
+        `render buffer length ${bytes.length} is not a whole number of rows ` +
+          `(numRows ${numRows})`,
+      );
+    }
+    this.buffer = bytes;
+    this.meta = { ...this.meta, width: bytes.length / numRows, numRows, names };
+  }
 }

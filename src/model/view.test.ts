@@ -44,3 +44,39 @@ describe("AlignmentView.resizeContents", () => {
     expect(decode(view.rowSlice(0))).toBe("ACGT");
   });
 });
+
+describe("AlignmentView.replaceAll", () => {
+  it("grows the row count + names (paste-as-sequences inserts a row)", () => {
+    const view = viewFrom(["ACGT", "TTTT"]);
+    // Inserted "GGGG" as a 3rd row: buffer is now 3×4, names follow.
+    view.replaceAll(new TextEncoder().encode("ACGTTTTTGGGG"), ["a", "b", "new"]);
+    expect(view.numRows).toBe(3);
+    expect(view.width).toBe(4);
+    expect(view.nameAt(2)).toBe("new");
+    expect(decode(view.rowSlice(2))).toBe("GGGG");
+  });
+
+  it("shrinks the row count + names (undo of an insert removes a row)", () => {
+    const view = viewFrom(["ACGT", "TTTT", "GGGG"]);
+    view.replaceAll(new TextEncoder().encode("ACGTTTTT"), ["a", "b"]);
+    expect(view.numRows).toBe(2);
+    expect(view.width).toBe(4);
+    expect(view.nameAt(1)).toBe("b");
+    expect(view.cellAt(2, 0)).toBeUndefined();
+  });
+
+  it("derives the width against names.length, not the stale numRows", () => {
+    // Same buffer length, different row count: 6 bytes is 3×2 (new) not 2×3 (old).
+    const view = viewFrom(["ACG", "TTT"]); // 2 rows × 3
+    view.replaceAll(new TextEncoder().encode("AACCGG"), ["a", "b", "c"]); // 3 rows × 2
+    expect(view.numRows).toBe(3);
+    expect(view.width).toBe(2);
+  });
+
+  it("throws when the length isn't a whole number of names.length rows", () => {
+    const view = viewFrom(["ACGT", "TTTT"]);
+    expect(() => view.replaceAll(new Uint8Array(5), ["a", "b"])).toThrow(/whole number of rows/);
+    expect(view.numRows).toBe(2);
+    expect(view.width).toBe(4);
+  });
+});

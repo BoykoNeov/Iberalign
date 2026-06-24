@@ -1,15 +1,19 @@
-// The grid toolbar: selection-scoped actions pinned above the grid. Today it
-// holds the copy controls — the `Sel: C × R` readout, the Copy button, and the
-// Raw|FASTA format toggle — plus an ephemeral status message ("Copied …" / a
-// size warning). It is where the paste/cut controls will join (Batches C/D).
+// The grid toolbar: selection-scoped actions pinned above the grid. It holds the
+// copy controls — the `Sel: C × R` readout, the Copy button, the Raw|FASTA copy-
+// format toggle — and the paste controls — the Paste button + an Insert|Overwrite
+// mode toggle — plus an ephemeral status message ("Copied …" / "Inserted …" / a
+// warning). It is where the cut controls will join (Batch D).
 //
-// Presentational: all state (the selection mirror, the chosen format, the
+// Presentational: all state (the selection mirror, the chosen format/mode, the
 // message) lives in `Grid`; this renders props and calls handlers. It re-renders
-// only on coarse events (a selection-rect change, a format toggle, a copy), never
+// only on coarse events (a selection-rect change, a toggle, a copy/paste), never
 // per frame — the canvas keeps drawing on its own rAF loop.
 
 import type { CopyFormat } from "../model/copy";
 import "./Toolbar.css";
+
+/** Raw block paste mode: insert (shift columns right) or overwrite cells in place. */
+export type PasteMode = "insert" | "overwrite";
 
 interface ToolbarProps {
   /** The selection size for the readout, or `null` when nothing is selected. */
@@ -17,18 +21,23 @@ interface ToolbarProps {
   /** The active copy format (the Raw|FASTA toggle). */
   copyFormat: CopyFormat;
   onSetFormat: (format: CopyFormat) => void;
+  /** The active raw-paste mode (the Insert|Overwrite toggle). */
+  pasteMode: PasteMode;
+  onSetPasteMode: (mode: PasteMode) => void;
   /** Copy the current selection (a no-op upstream when nothing is selected). */
   onCopy: () => void;
-  /** Paste the clipboard over the selection (overwrite); no-op without one. */
+  /** Paste the clipboard (FASTA ⇒ new sequences; else a block in the paste mode). */
   onPaste: () => void;
-  /** Ephemeral feedback ("Copied 3 × 12", "Pasted …", a size warning), or `null`. */
-  message: string | null;
+  /** Ephemeral feedback with a tone (`warn` ⇒ bold red, lingers), or `null`. */
+  message: { text: string; tone: "info" | "warn" } | null;
 }
 
 export default function Toolbar({
   selInfo,
   copyFormat,
   onSetFormat,
+  pasteMode,
+  onSetPasteMode,
   onCopy,
   onPaste,
   message,
@@ -56,16 +65,6 @@ export default function Toolbar({
         Copy
       </button>
 
-      <button
-        type="button"
-        className="toolbar-btn"
-        onClick={onPaste}
-        disabled={!hasSel}
-        title="Paste the clipboard at the selection, inserting (Ctrl/⌘+V)"
-      >
-        Paste
-      </button>
-
       <span className="toolbar-toggle" role="group" aria-label="Copy format">
         <button
           type="button"
@@ -87,9 +86,42 @@ export default function Toolbar({
         </button>
       </span>
 
+      <button
+        type="button"
+        className="toolbar-btn"
+        onClick={onPaste}
+        title="Paste the clipboard (Ctrl/⌘+V) — FASTA inserts new sequences; a raw block uses the mode at right"
+      >
+        Paste
+      </button>
+
+      <span className="toolbar-toggle" role="group" aria-label="Raw paste mode">
+        <button
+          type="button"
+          className={pasteMode === "insert" ? "toggle-on" : ""}
+          aria-pressed={pasteMode === "insert"}
+          onClick={() => onSetPasteMode("insert")}
+          title="Insert a pasted block, shifting existing columns right (the alignment grows)"
+        >
+          Insert
+        </button>
+        <button
+          type="button"
+          className={pasteMode === "overwrite" ? "toggle-on" : ""}
+          aria-pressed={pasteMode === "overwrite"}
+          onClick={() => onSetPasteMode("overwrite")}
+          title="Overwrite cells in place; grow the width only if the block runs past the right edge"
+        >
+          Overwrite
+        </button>
+      </span>
+
       {message && (
-        <span className="toolbar-msg" aria-live="polite">
-          {message}
+        <span
+          className={message.tone === "warn" ? "toolbar-msg warn" : "toolbar-msg"}
+          aria-live="polite"
+        >
+          {message.text}
         </span>
       )}
     </div>

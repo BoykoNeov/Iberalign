@@ -22,10 +22,10 @@ export function clearCells(rect: CellRect): Promise<Uint8Array> {
 
 /**
  * Paste a block of residue lines over the alignment in OVERWRITE mode, with the
- * block's top-left at `(r0, c0)`. The block is clamped to the alignment bounds in
- * Rust (lines past the last row dropped, each line truncated to the remaining
- * width), so this stays width-preserving and returns the post-edit buffer like
- * the other edits. The width-changing insert modes get their own wrappers later.
+ * block's top-left at `(r0, c0)`: cells are overwritten in place, lines past the
+ * last row are dropped, and the alignment GROWS to fit a block that runs past the
+ * right edge (it never truncates horizontally). The returned buffer may be WIDER,
+ * so the caller derives the new width from its length (same as paste-insert).
  */
 export function pasteOverwrite(r0: number, c0: number, rows: string[]): Promise<Uint8Array> {
   return editBuffer("paste_overwrite", { r0, c0, rows });
@@ -46,6 +46,24 @@ export function pasteInsert(
   shiftAll: boolean,
 ): Promise<Uint8Array> {
   return editBuffer("paste_insert", { r0, c0, rows, shiftAll });
+}
+
+/** Outcome of {@link pasteSequences}: rows inserted + how many were truncated to
+ *  the alignment width (clamp + warn). Mirror of the Rust `PasteSeqDto`. */
+export interface PasteSeqResult {
+  inserted: number;
+  truncated: number;
+}
+
+/**
+ * Paste FASTA from the clipboard as NEW sequences inserted at row index `at`. The
+ * raw clipboard text is parsed in Rust (tolerant FASTA: wrapped lines, dup names,
+ * `.`→`-`). Unlike the buffer-returning edits this returns a small JSON status —
+ * the row count changed, so the caller re-syncs its view from `getAlignmentMeta` +
+ * `getRenderBuffer` (the load path) rather than swapping a fixed-row buffer.
+ */
+export function pasteSequences(at: number, text: string): Promise<PasteSeqResult> {
+  return invoke<PasteSeqResult>("paste_sequences", { at, text });
 }
 
 /** Undo the most recent edit. Empty result ⇒ nothing to undo. */

@@ -40,9 +40,11 @@ import StatusBar from "./StatusBar";
 import Toolbar from "./Toolbar";
 import { normalize, rectDims } from "../state/selection";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
-import { parseClipboard } from "../model/paste";
+import { looksLikeFasta, parseClipboard } from "../model/paste";
 import { copyText, readClipboardText } from "../ipc/clipboard";
-import { clearCells, pasteInsert, undoEdit, redoEdit } from "../ipc/edit";
+import { clearCells, pasteInsert, pasteOverwrite, pasteSequences, undoEdit, redoEdit } from "../ipc/edit";
+import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
+import type { PasteMode } from "./Toolbar";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -131,7 +133,15 @@ export default function Grid({ view, onResized }: GridProps) {
   const lastSelRef = useRef<string | null>(null);
   const [copyFormat, setCopyFormat] = useState<CopyFormat>("raw");
   const copyFormatRef = useRef<CopyFormat>("raw");
-  const [copyMsg, setCopyMsg] = useState<string | null>(null);
+  // Paste mode (Insert | Overwrite) for a RAW block paste, default Insert. The ref
+  // shadows it so the once-bound keydown + effect-scoped `doPaste` read the live
+  // value without re-binding. (FASTA paste ignores this — it always inserts new
+  // sequences.)
+  const [pasteMode, setPasteMode] = useState<PasteMode>("insert");
+  const pasteModeRef = useRef<PasteMode>("insert");
+  // Ephemeral toolbar message with a tone: `warn` (failures / dropped / truncated)
+  // shows bold red and lingers; `info` (copied / inserted) is plain and brief.
+  const [copyMsg, setCopyMsg] = useState<{ text: string; tone: "info" | "warn" } | null>(null);
   const msgTimerRef = useRef<number | null>(null);
   const doCopyRef = useRef<() => void>(() => {});
   // Paste bridge: `doPaste` is defined inside the mount effect (it needs the
@@ -149,14 +159,19 @@ export default function Grid({ view, onResized }: GridProps) {
   const onResizedRef = useRef(onResized);
   onResizedRef.current = onResized;
 
-  // Flash an ephemeral message in the toolbar, auto-clearing after a moment.
-  const showMsg = useCallback((msg: string) => {
-    setCopyMsg(msg);
+  // Flash an ephemeral message in the toolbar, auto-clearing after a moment. A
+  // `warn` message (a failure, dropped/truncated rows) lingers a little longer than
+  // an `info` one so it is not missed.
+  const showMsg = useCallback((text: string, tone: "info" | "warn" = "info") => {
+    setCopyMsg({ text, tone });
     if (msgTimerRef.current !== null) window.clearTimeout(msgTimerRef.current);
-    msgTimerRef.current = window.setTimeout(() => {
-      setCopyMsg(null);
-      msgTimerRef.current = null;
-    }, 2500);
+    msgTimerRef.current = window.setTimeout(
+      () => {
+        setCopyMsg(null);
+        msgTimerRef.current = null;
+      },
+      tone === "warn" ? 4500 : 2500,
+    );
   }, []);
 
   // Copy the selected block to the clipboard in the current format. Stable (reads
@@ -169,20 +184,20 @@ export default function Grid({ view, onResized }: GridProps) {
     if (!store || !view) return;
     const sel = store.getSelection();
     if (!sel) {
-      showMsg("Select cells first, then copy");
+      showMsg("Select cells first, then copy", "warn");
       return;
     }
     const rect = normalize(sel);
     const { rows, cols } = rectDims(rect);
     if (rows * cols > COPY_CELL_CAP) {
-      showMsg(`Selection too large to copy (${rows * cols} cells; limit ${COPY_CELL_CAP})`);
+      showMsg(`Selection too large to copy (${rows * cols} cells; limit ${COPY_CELL_CAP})`, "warn");
       return;
     }
     try {
       await copyText(buildCopyText(view, rect, copyFormatRef.current));
       showMsg(`Copied ${cols} × ${rows} (${copyFormatRef.current === "fasta" ? "FASTA" : "raw"})`);
     } catch (e) {
-      showMsg(`Copy failed: ${String(e)}`);
+      showMsg(`Copy failed: ${String(e)}`, "warn");
     }
   }, [showMsg]);
   doCopyRef.current = doCopy;
@@ -191,6 +206,13 @@ export default function Grid({ view, onResized }: GridProps) {
   const handleSetFormat = useCallback((format: CopyFormat) => {
     copyFormatRef.current = format;
     setCopyFormat(format);
+  }, []);
+
+  // Toggle the paste mode (Insert | Overwrite) from the toolbar; mirror into the
+  // ref the keydown + effect-scoped paste read.
+  const handleSetPasteMode = useCallback((mode: PasteMode) => {
+    pasteModeRef.current = mode;
+    setPasteMode(mode);
   }, []);
 
   // Toolbar Paste button → the effect-scoped paste flow (via the ref above).
@@ -457,57 +479,151 @@ export default function Grid({ view, onResized }: GridProps) {
         }
         return false;
       } catch (err) {
-        showMsg(`Edit failed: ${String(err)}`);
+        showMsg(`Edit failed: ${String(err)}`, "warn");
         return false;
       } finally {
         editingRef.current = false;
       }
     };
 
-    // Paste the system clipboard into the selection in INSERT mode — the default
-    // (shift only the pasted rows; the alignment GROWS in width). The clipboard
-    // read + parse happen OUTSIDE `runEdit` (whose try/catch covers only the edit
-    // IPC), so they guard a denied / non-text / empty clipboard themselves. The
-    // block anchors at the selection's top-left; lines past the last row are
-    // dropped (an insert can't add rows). On success the selection expands to the
-    // inserted block so the change — and its undo — visibly lands. (Overwrite mode
-    // and the shift-all toggle join via the toolbar in later batches; the engine
-    // already supports both.)
-    const doPaste = async () => {
+    // Swap in a post-edit buffer whose ROW COUNT / NAMES may have changed (a
+    // structural edit — paste-as-sequences, or the undo/redo reversing one). Uses
+    // the authoritative `names` from Rust to set the row count, so width is derived
+    // correctly even when the count flips. Same `view` object ⇒ scroll + selection
+    // survive; `updateDims` re-clamps both to the new extent. Caller wraps it in the
+    // `editingRef` guard.
+    const applyResynced = (bytes: Uint8Array, names: string[]) => {
+      const v = viewRef.current;
+      if (!v) return;
+      const prevWidth = v.width;
+      v.replaceAll(bytes, names);
+      store.updateDims(v.width, v.numRows);
+      renderer.invalidateContentCaches();
+      store.markDirty();
+      if (v.width !== prevWidth) onResizedRef.current?.(v.width);
+    };
+
+    // Undo / redo go through the FULL re-sync (meta + buffer), not the fast in-place
+    // path: a generic undo/redo can reverse a row-COUNT-changing edit (paste-as-
+    // sequences), and deriving width against a stale row count would corrupt the
+    // render. The small meta fetch (names) is cheap next to the buffer. An empty
+    // buffer means a no-op (the end of the stack) — skip the repaint.
+    const runResyncEdit = async (op: () => Promise<Uint8Array>): Promise<boolean> => {
+      const v = viewRef.current;
+      if (!v || editingRef.current) return false;
+      editingRef.current = true;
+      try {
+        const bytes = await op();
+        if (bytes.length === 0) return false;
+        const meta = await getAlignmentMeta();
+        applyResynced(bytes, meta.names);
+        return true;
+      } catch (err) {
+        showMsg(`Edit failed: ${String(err)}`, "warn");
+        return false;
+      } finally {
+        editingRef.current = false;
+      }
+    };
+
+    // FASTA clipboard → insert as NEW sequences at the selection's top row (append
+    // if nothing is selected). Rust parses the FASTA + clamps each sequence to the
+    // alignment width; we then re-sync the view (the row count grew) and select the
+    // inserted block. Serialized via `editingRef`. Reads + parses are in Rust, so a
+    // non-FASTA / empty clipboard simply inserts nothing (`inserted === 0`).
+    const pasteFasta = async (text: string) => {
+      const v = viewRef.current;
+      if (!v || editingRef.current) return;
+      const sel = store.getSelection();
+      const at = sel ? normalize(sel).r0 : v.numRows;
+      editingRef.current = true;
+      try {
+        const res = await pasteSequences(at, text);
+        if (res.inserted === 0) {
+          showMsg("Clipboard has no sequences to paste", "warn");
+          return;
+        }
+        // Row count changed ⇒ rebuild from the authoritative meta + buffer.
+        const [meta, bytes] = await Promise.all([getAlignmentMeta(), getRenderBuffer()]);
+        applyResynced(bytes, meta.names);
+        store.setCursor(at, 0);
+        store.setActive(at + res.inserted - 1, Math.max(0, v.width - 1));
+        showMsg(
+          res.truncated > 0
+            ? `Inserted ${res.inserted} sequence${res.inserted > 1 ? "s" : ""} (${res.truncated} truncated to width ${v.width})`
+            : `Inserted ${res.inserted} sequence${res.inserted > 1 ? "s" : ""}`,
+          res.truncated > 0 ? "warn" : "info",
+        );
+      } catch (err) {
+        showMsg(`Paste failed: ${String(err)}`, "warn");
+      } finally {
+        editingRef.current = false;
+      }
+    };
+
+    // Raw (non-FASTA) block paste into the selected cells, in the current mode:
+    //   - Insert (default): the block is inserted at the anchor, shifting the pasted
+    //     rows' columns right (the alignment GROWS in width).
+    //   - Overwrite: the block overwrites cells in place; it grows the width only
+    //     when it runs past the right edge (never truncates).
+    // Both anchor at the selection's top-left; lines past the last row are dropped
+    // (a block paste never adds rows — that's the FASTA path). On success the
+    // selection expands to the pasted block so the change — and its undo — lands.
+    const pasteRawBlock = async (text: string) => {
       const v = viewRef.current;
       if (!v) return;
       const sel = store.getSelection();
       if (!sel) {
-        showMsg("Select where to paste first");
-        return;
-      }
-      let text: string;
-      try {
-        text = await readClipboardText();
-      } catch (err) {
-        showMsg(`Paste failed: ${String(err)}`);
+        showMsg("Select where to paste first", "warn");
         return;
       }
       const rows = parseClipboard(text);
       if (rows.length === 0) {
-        showMsg("Clipboard has no text to paste");
+        showMsg("Clipboard has no text to paste", "warn");
         return;
       }
       const { r0, c0 } = normalize(sel);
-      // Lines map to rows r0.. ; those past the last row can't be inserted.
       const keptRows = Math.min(rows.length, v.numRows - r0);
       const dropped = rows.length - keptRows;
       const w = rows.slice(0, keptRows).reduce((m, line) => Math.max(m, line.length), 0);
-      const ok = await runEdit(() => pasteInsert(r0, c0, rows, false));
+      const overwrite = pasteModeRef.current === "overwrite";
+      const ok = await runEdit(() =>
+        overwrite ? pasteOverwrite(r0, c0, rows) : pasteInsert(r0, c0, rows, false),
+      );
       if (!ok) return; // empty block (all kept lines blank) ⇒ no-op
-      // Select the inserted block (now occupying cols c0..c0+w-1 in the target rows).
-      store.setCursor(r0, c0);
-      store.setActive(r0 + keptRows - 1, c0 + w - 1);
+      if (keptRows > 0 && w > 0) {
+        store.setCursor(r0, c0);
+        store.setActive(r0 + keptRows - 1, c0 + w - 1);
+      }
+      const verb = overwrite ? "Overwrote" : "Inserted";
       showMsg(
         dropped > 0
-          ? `Inserted ${w} × ${keptRows} (${dropped} row${dropped > 1 ? "s" : ""} past the end dropped)`
-          : `Inserted ${w} × ${keptRows} (insert)`,
+          ? `${verb} ${w} × ${keptRows} (${dropped} row${dropped > 1 ? "s" : ""} past the end dropped)`
+          : `${verb} ${w} × ${keptRows}`,
+        dropped > 0 ? "warn" : "info",
       );
+    };
+
+    // Paste entry point (Ctrl/⌘+V + the toolbar button): read the clipboard once,
+    // then route on its shape — FASTA ⇒ insert new sequences; otherwise ⇒ a raw
+    // block paste in the current Insert/Overwrite mode. The read is OUTSIDE the edit
+    // guards so a denied / non-text clipboard is handled here.
+    const doPaste = async () => {
+      const v = viewRef.current;
+      if (!v) return;
+      let text: string;
+      try {
+        text = await readClipboardText();
+      } catch (err) {
+        showMsg(`Paste failed: ${String(err)}`, "warn");
+        return;
+      }
+      if (text.trim() === "") {
+        showMsg("Clipboard has no text to paste", "warn");
+        return;
+      }
+      if (looksLikeFasta(text)) await pasteFasta(text);
+      else await pasteRawBlock(text);
     };
     doPasteRef.current = doPaste;
 
@@ -564,15 +680,17 @@ export default function Grid({ view, onResized }: GridProps) {
         }
         return;
       }
-      // Undo / Redo. Ctrl/⌘+Z undoes; Ctrl/⌘+Shift+Z or Ctrl/⌘+Y redoes.
+      // Undo / Redo. Ctrl/⌘+Z undoes; Ctrl/⌘+Shift+Z or Ctrl/⌘+Y redoes. These go
+      // through `runResyncEdit` (full meta + buffer re-sync) because a generic
+      // undo/redo can reverse a row-COUNT-changing edit (paste-as-sequences).
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
-        void runEdit(e.shiftKey ? redoEdit : undoEdit);
+        void runResyncEdit(e.shiftKey ? redoEdit : undoEdit);
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) {
         e.preventDefault();
-        void runEdit(redoEdit);
+        void runResyncEdit(redoEdit);
         return;
       }
       const corner = e.ctrlKey || e.metaKey;
@@ -783,6 +901,8 @@ export default function Grid({ view, onResized }: GridProps) {
         selInfo={selInfo}
         copyFormat={copyFormat}
         onSetFormat={handleSetFormat}
+        pasteMode={pasteMode}
+        onSetPasteMode={handleSetPasteMode}
         onCopy={doCopy}
         onPaste={handlePaste}
         message={copyMsg}

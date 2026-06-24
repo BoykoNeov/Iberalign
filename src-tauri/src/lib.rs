@@ -21,6 +21,7 @@ pub fn run() {
             commands::clear_cells,
             commands::paste_overwrite,
             commands::paste_insert,
+            commands::paste_sequences,
             commands::undo_edit,
             commands::redo_edit
         ])

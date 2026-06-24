@@ -8,7 +8,7 @@
 //! the gap-edit/row commands remain `todo!()` until their batches land.
 
 use crate::coords::is_gap;
-use crate::model::{Alignment, Dataset, SeqId};
+use crate::model::{AlignedRow, Alignment, Alphabet, Dataset, SeqId, Sequence};
 use std::fmt;
 use std::ops::Range;
 
@@ -43,6 +43,21 @@ pub struct RowSplice {
     pub bytes: Vec<u8>,
 }
 
+/// A whole new sequence row to splice into the alignment — the payload of
+/// [`EditCmd::InsertRows`]. `gapped` is already gap-padded/truncated to the
+/// alignment width by the caller (so the inserted rows keep the single-width
+/// invariant); the ungapped residues + alphabet are *derived* from it at apply
+/// time. `id` is supplied by the caller (a fresh, non-colliding [`SeqId`] for a
+/// paste; the captured original id when this row is the inverse of a delete) so
+/// insert/delete round-trip losslessly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowData {
+    pub id: SeqId,
+    pub name: String,
+    pub description: String,
+    pub gapped: Vec<u8>,
+}
+
 /// A reversible edit. Applying a command returns its inverse for the undo
 /// stack and reports which rows changed so the frontend can patch its buffer.
 #[derive(Clone, Debug)]
@@ -60,6 +75,24 @@ pub enum EditCmd {
     /// it and rejects a ragged result without mutating.
     SpliceRows {
         splices: Vec<RowSplice>,
+    },
+    /// Insert whole new sequence rows at row index `at` (existing rows from `at`
+    /// shift down) — the primitive behind paste-as-sequences. Dataset-level: it
+    /// adds both an [`AlignedRow`] and its ungapped [`Sequence`] (so it routes
+    /// through [`apply_to_dataset`], never the matrix-only [`apply`]). Each row's
+    /// `gapped` must already equal the alignment width; the inverse is a
+    /// [`EditCmd::DeleteRows`] of the same range.
+    InsertRows {
+        at: usize,
+        rows: Vec<RowData>,
+    },
+    /// Remove `count` whole rows starting at row index `at` — the inverse of
+    /// [`EditCmd::InsertRows`] (and the future row-delete UI). Dataset-level: it
+    /// drops both the [`AlignedRow`]s and their [`Sequence`]s, capturing them so
+    /// its inverse re-inserts them verbatim (ids/names preserved).
+    DeleteRows {
+        at: usize,
+        count: usize,
     },
     InsertGap {
         rows: RowSel,
@@ -163,6 +196,12 @@ pub fn apply(aln: &mut Alignment, cmd: EditCmd) -> Result<EditOutcome, EditError
     match cmd {
         EditCmd::SetCells { writes } => apply_set_cells(aln, writes),
         EditCmd::SpliceRows { splices } => apply_splice_rows(aln, splices),
+        // Structural commands need the whole `Dataset` (sequences + names), not
+        // just the matrix — `apply_to_dataset` intercepts them before they ever
+        // reach here. Reaching this arm is a routing bug, not a `todo!()`.
+        EditCmd::InsertRows { .. } | EditCmd::DeleteRows { .. } => {
+            unreachable!("InsertRows/DeleteRows are Dataset-level — route through apply_to_dataset")
+        }
         EditCmd::InsertGap { .. }
         | EditCmd::DeleteGap { .. }
         | EditCmd::SlideResidues { .. }
@@ -171,6 +210,121 @@ pub fn apply(aln: &mut Alignment, cmd: EditCmd) -> Result<EditOutcome, EditError
         | EditCmd::SetRowHidden { .. }
         | EditCmd::DeleteSeq { .. } => todo!("M5: implement the remaining edit commands"),
     }
+}
+
+/// Insert whole new rows at index `at`, returning a [`EditCmd::DeleteRows`]
+/// inverse. Adds an [`AlignedRow`] + a derived [`Sequence`] per row to the
+/// dataset, keeping `sequences[i]` index-aligned with `rows[i]`. Atomic: every
+/// row's width is validated before any mutation. Each new row's `gapped` must
+/// equal the alignment width — except when the alignment is empty (no rows yet),
+/// where the inserted rows establish the width (they must still agree among
+/// themselves). An empty `rows` is a no-op (empty `changed_rows`, so the history
+/// records nothing).
+fn insert_rows(ds: &mut Dataset, at: usize, rows: Vec<RowData>) -> Result<EditOutcome, EditError> {
+    let num_rows = ds.alignment.num_rows();
+    if at > num_rows {
+        return Err(EditError::RowOutOfBounds { row: at, num_rows });
+    }
+    if rows.is_empty() {
+        return Ok(EditOutcome {
+            inverse: EditCmd::DeleteRows { at, count: 0 },
+            changed_rows: Vec::new(),
+        });
+    }
+    // All new rows must share one width; if rows already exist, that width must be
+    // the alignment width (else the single-width invariant breaks). Validated
+    // before mutating, so a ragged set errors atomically (state untouched).
+    let new_w = rows[0].gapped.len();
+    for (i, r) in rows.iter().enumerate() {
+        if r.gapped.len() != new_w {
+            return Err(EditError::WidthMismatch {
+                row: at + i,
+                got: r.gapped.len(),
+                expected: new_w,
+            });
+        }
+    }
+    if num_rows > 0 && new_w != ds.alignment.width {
+        return Err(EditError::WidthMismatch {
+            row: at,
+            got: new_w,
+            expected: ds.alignment.width,
+        });
+    }
+
+    let count = rows.len();
+    let mut seqs: Vec<Sequence> = Vec::with_capacity(count);
+    let mut aligned: Vec<AlignedRow> = Vec::with_capacity(count);
+    for r in rows {
+        let residues: Vec<u8> = r.gapped.iter().copied().filter(|&b| !is_gap(b)).collect();
+        let alphabet = Alphabet::infer(&residues);
+        seqs.push(Sequence {
+            id: r.id,
+            name: r.name,
+            description: r.description,
+            alphabet,
+            residues,
+        });
+        aligned.push(AlignedRow::new(r.id, r.gapped));
+    }
+    ds.sequences.splice(at..at, seqs);
+    ds.alignment.rows.splice(at..at, aligned);
+    // An empty alignment adopts the inserted rows' width; otherwise it already
+    // matched (validated above), so this is a no-op write.
+    ds.alignment.width = new_w;
+    ds.alignment.invalidate_caches();
+
+    Ok(EditOutcome {
+        inverse: EditCmd::DeleteRows { at, count },
+        changed_rows: (at..at + count).collect(),
+    })
+}
+
+/// Remove `count` rows at index `at`, returning a [`EditCmd::InsertRows`] inverse
+/// carrying the removed rows verbatim (ids/names/gapped) so a redo restores them
+/// exactly. Atomic: the range is bounds-checked before any mutation. `count == 0`
+/// is a no-op. Width is left unchanged — the surviving rows are all still the
+/// alignment width (a row delete removes whole rows, never columns).
+fn delete_rows(ds: &mut Dataset, at: usize, count: usize) -> Result<EditOutcome, EditError> {
+    let num_rows = ds.alignment.num_rows();
+    if at + count > num_rows {
+        return Err(EditError::RowOutOfBounds {
+            row: at + count,
+            num_rows,
+        });
+    }
+    if count == 0 {
+        return Ok(EditOutcome {
+            inverse: EditCmd::InsertRows {
+                at,
+                rows: Vec::new(),
+            },
+            changed_rows: Vec::new(),
+        });
+    }
+    // Drain both vecs over the same range (they are index-aligned), then zip the
+    // removed sequences + rows into the inverse's `RowData`.
+    let removed_seqs: Vec<Sequence> = ds.sequences.drain(at..at + count).collect();
+    let removed_rows: Vec<AlignedRow> = ds.alignment.rows.drain(at..at + count).collect();
+    let captured: Vec<RowData> = removed_seqs
+        .into_iter()
+        .zip(removed_rows)
+        .map(|(s, r)| RowData {
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            gapped: r.gapped,
+        })
+        .collect();
+    ds.alignment.invalidate_caches();
+
+    Ok(EditOutcome {
+        inverse: EditCmd::InsertRows { at, rows: captured },
+        // Pre-delete positions: a non-empty marker so the history records the
+        // edit. Structural commands skip the residue-resync loop (see
+        // `apply_to_dataset`), so these indices are never used to index rows.
+        changed_rows: (at..at + count).collect(),
+    })
 }
 
 fn apply_set_cells(aln: &mut Alignment, writes: Vec<CellWrite>) -> Result<EditOutcome, EditError> {
@@ -342,11 +496,23 @@ fn resync_residues(ds: &mut Dataset, row: usize) {
 /// [`EditStack`]) over the bare matrix-level [`apply`], which a caller could
 /// pair with a forgotten resync.
 pub fn apply_to_dataset(ds: &mut Dataset, cmd: EditCmd) -> Result<EditOutcome, EditError> {
-    let outcome = apply(&mut ds.alignment, cmd)?;
-    for &r in &outcome.changed_rows {
-        resync_residues(ds, r);
+    match cmd {
+        // Structural commands change the row SET (and the sequences/names that
+        // ride with it), so they own the whole `Dataset` and build their derived
+        // state themselves — they must NOT go through the matrix `apply` + the
+        // index-based residue resync (whose row indexes assume a stable row set).
+        EditCmd::InsertRows { at, rows } => insert_rows(ds, at, rows),
+        EditCmd::DeleteRows { at, count } => delete_rows(ds, at, count),
+        // Matrix commands mutate cells in existing rows: apply, then resync the
+        // derived ungapped residues for the rows that changed.
+        other => {
+            let outcome = apply(&mut ds.alignment, other)?;
+            for &r in &outcome.changed_rows {
+                resync_residues(ds, r);
+            }
+            Ok(outcome)
+        }
     }
-    Ok(outcome)
 }
 
 /// A reversible edit history over a [`Dataset`]. Applying a command records its
@@ -451,6 +617,15 @@ mod tests {
 
     fn splice(splices: Vec<RowSplice>) -> EditCmd {
         EditCmd::SpliceRows { splices }
+    }
+
+    fn row_data(id: SeqId, name: &str, gapped: &str) -> RowData {
+        RowData {
+            id,
+            name: name.to_string(),
+            description: String::new(),
+            gapped: gapped.as_bytes().to_vec(),
+        }
     }
 
     fn dataset(records: &[(&str, &str)]) -> Dataset {
@@ -706,5 +881,168 @@ mod tests {
         stack.clear();
         assert!(!stack.can_undo());
         assert!(!stack.can_redo());
+    }
+
+    // ---- structural commands (InsertRows / DeleteRows) ---------------------
+
+    #[test]
+    fn insert_rows_adds_sequences_and_aligned_rows() {
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT")]);
+        let out = apply_to_dataset(
+            &mut ds,
+            EditCmd::InsertRows {
+                at: 1,
+                rows: vec![row_data(7, "new", "GGGG")],
+            },
+        )
+        .unwrap();
+        // Inserted at index 1, shifting "b" down. Both vecs stay index-aligned.
+        assert_eq!(ds.alignment.num_rows(), 3);
+        assert_eq!(ds.alignment.rows[1].gapped, b"GGGG");
+        assert_eq!(ds.sequences[1].name, "new");
+        assert_eq!(ds.sequences[1].id, 7);
+        assert_eq!(ds.sequences[1].residues, b"GGGG"); // derived, gaps dropped
+        assert_eq!(ds.sequences[2].name, "b");
+        assert_eq!(ds.alignment.width, 4);
+        // Inverse removes exactly the inserted row.
+        assert!(matches!(
+            out.inverse,
+            EditCmd::DeleteRows { at: 1, count: 1 }
+        ));
+        apply_to_dataset(&mut ds, out.inverse).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 2);
+        assert_eq!(ds.sequences[1].name, "b");
+    }
+
+    #[test]
+    fn insert_rows_derives_residues_dropping_gaps() {
+        let mut ds = dataset(&[("a", "ACGT")]);
+        apply_to_dataset(
+            &mut ds,
+            EditCmd::InsertRows {
+                at: 1,
+                rows: vec![row_data(1, "g", "A--T")],
+            },
+        )
+        .unwrap();
+        assert_eq!(ds.alignment.rows[1].gapped, b"A--T");
+        assert_eq!(ds.sequences[1].residues, b"AT");
+    }
+
+    #[test]
+    fn insert_rows_width_mismatch_errors_atomically() {
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT")]);
+        let err = apply_to_dataset(
+            &mut ds,
+            EditCmd::InsertRows {
+                at: 0,
+                rows: vec![row_data(9, "short", "GG")],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            EditError::WidthMismatch {
+                row: 0,
+                got: 2,
+                expected: 4
+            }
+        );
+        // Untouched.
+        assert_eq!(ds.alignment.num_rows(), 2);
+    }
+
+    #[test]
+    fn insert_rows_at_out_of_bounds_errors() {
+        let mut ds = dataset(&[("a", "ACGT")]);
+        let err = apply_to_dataset(
+            &mut ds,
+            EditCmd::InsertRows {
+                at: 5,
+                rows: vec![row_data(1, "x", "ACGT")],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            EditError::RowOutOfBounds {
+                row: 5,
+                num_rows: 1
+            }
+        );
+    }
+
+    #[test]
+    fn insert_rows_into_empty_dataset_adopts_width() {
+        let mut ds = Dataset::default();
+        apply_to_dataset(
+            &mut ds,
+            EditCmd::InsertRows {
+                at: 0,
+                rows: vec![row_data(0, "a", "ACGT"), row_data(1, "b", "TTTT")],
+            },
+        )
+        .unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.num_rows(), 2);
+    }
+
+    #[test]
+    fn delete_rows_round_trips_through_inverse() {
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT"), ("c", "GGGG")]);
+        let out = apply_to_dataset(&mut ds, EditCmd::DeleteRows { at: 0, count: 2 }).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 1);
+        assert_eq!(ds.sequences[0].name, "c");
+        // Inverse re-inserts the captured rows verbatim (ids/names/gapped restored).
+        apply_to_dataset(&mut ds, out.inverse).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 3);
+        assert_eq!(ds.sequences[0].name, "a");
+        assert_eq!(ds.sequences[1].name, "b");
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"TTTT");
+    }
+
+    #[test]
+    fn stack_insert_rows_undo_redo_preserves_names_and_ids() {
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT")]);
+        let mut stack = EditStack::new();
+        let changed = stack
+            .apply(
+                &mut ds,
+                EditCmd::InsertRows {
+                    at: 2,
+                    rows: vec![row_data(42, "appended", "CCCC")],
+                },
+            )
+            .unwrap();
+        assert!(!changed.is_empty()); // recorded
+        assert_eq!(ds.alignment.num_rows(), 3);
+
+        stack.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 2);
+
+        stack.redo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 3);
+        assert_eq!(ds.sequences[2].name, "appended");
+        assert_eq!(ds.sequences[2].id, 42); // exact id restored on redo
+        assert_eq!(ds.alignment.rows[2].gapped, b"CCCC");
+    }
+
+    #[test]
+    fn empty_insert_rows_is_a_noop_not_recorded() {
+        let mut ds = dataset(&[("a", "ACGT")]);
+        let mut stack = EditStack::new();
+        let changed = stack
+            .apply(
+                &mut ds,
+                EditCmd::InsertRows {
+                    at: 1,
+                    rows: vec![],
+                },
+            )
+            .unwrap();
+        assert!(changed.is_empty());
+        assert!(!stack.can_undo());
+        assert_eq!(ds.alignment.num_rows(), 1);
     }
 }
