@@ -27,6 +27,12 @@ export type CutMode = "shorten" | "mask";
  *  The explicit Del Rows / Del Cols buttons are always structural regardless. */
 export type DeleteMode = "shorten" | "mask";
 
+/** Keyboard-ENTRY mode (typing a residue at the cursor): `replace` (default)
+ *  overwrites the active cell in place (width preserved); `insert` splices a new
+ *  column into the active sequence, pushing its tail right (the alignment grows).
+ *  Toggled by the toolbar or the Insert key. */
+export type TypeMode = "replace" | "insert";
+
 interface ToolbarProps {
   /** The selection size for the readout, or `null` when nothing is selected. */
   selInfo: { rows: number; cols: number } | null;
@@ -46,6 +52,9 @@ interface ToolbarProps {
   /** The active Delete-key mode (the Shorten|Mask toggle for Delete/Backspace). */
   deleteMode: DeleteMode;
   onSetDeleteMode: (mode: DeleteMode) => void;
+  /** The active keyboard-entry mode (the Replace|Insert toggle for typing). */
+  typeMode: TypeMode;
+  onSetTypeMode: (mode: TypeMode) => void;
   /** Delete the selected sequences (rows) — structural, removes them. No-op
    *  upstream when nothing is selected. */
   onDeleteRows: () => void;
@@ -74,6 +83,8 @@ export default function Toolbar({
   onSetCutMode,
   deleteMode,
   onSetDeleteMode,
+  typeMode,
+  onSetTypeMode,
   onDeleteRows,
   onDeleteColumns,
   onCopy,
@@ -252,6 +263,28 @@ export default function Toolbar({
           title="Delete clears the selected cells to gaps — geometry unchanged (the old behavior)"
         >
           Mask
+        </button>
+      </span>
+
+      <span className="toolbar-label">type</span>
+      <span className="toolbar-toggle" role="group" aria-label="Keyboard entry mode">
+        <button
+          type="button"
+          className={typeMode === "replace" ? "toggle-on" : ""}
+          aria-pressed={typeMode === "replace"}
+          onClick={() => onSetTypeMode("replace")}
+          title="Replace — typing a residue overwrites the cell at the cursor (the Insert key toggles this)"
+        >
+          Replace
+        </button>
+        <button
+          type="button"
+          className={typeMode === "insert" ? "toggle-on" : ""}
+          aria-pressed={typeMode === "insert"}
+          onClick={() => onSetTypeMode("insert")}
+          title="Insert — typing a residue splices a new column into the sequence at the cursor; the alignment grows (the Insert key toggles this)"
+        >
+          Insert
         </button>
       </span>
 

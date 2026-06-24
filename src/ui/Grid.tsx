@@ -65,7 +65,8 @@ import {
   redoEdit,
 } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
-import type { PasteMode, CutMode, DeleteMode } from "./Toolbar";
+import { isResidueKey } from "../model/typing";
+import type { PasteMode, CutMode, DeleteMode, TypeMode } from "./Toolbar";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -185,6 +186,13 @@ export default function Grid({ view, onResized }: GridProps) {
   // unchanged). The ref shadows it for the once-bound keydown handler.
   const [deleteMode, setDeleteMode] = useState<DeleteMode>("shorten");
   const deleteModeRef = useRef<DeleteMode>("shorten");
+  // Keyboard-entry mode (Replace | Insert), default Replace — the safe in-place
+  // overwrite. Replace types over the cell at the cursor; Insert splices a new
+  // column into the active sequence (the alignment grows). The ref shadows it for
+  // the once-bound keydown handler + the effect-scoped `doType`, same as the modes
+  // above. The Insert key toggles it (the text-editor convention).
+  const [typeMode, setTypeMode] = useState<TypeMode>("replace");
+  const typeModeRef = useRef<TypeMode>("replace");
   // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
   // red, `info` (copied / inserted) is plain. The message PERSISTS — it does not
   // time out; it clears when the user takes their next action (see the effect below)
@@ -339,6 +347,13 @@ export default function Grid({ view, onResized }: GridProps) {
     setDeleteMode(mode);
   }, []);
 
+  // Toggle the keyboard-entry mode (Replace | Insert) from the toolbar OR the Insert
+  // key; mirror into the ref the once-bound keydown + effect-scoped `doType` read.
+  const handleSetTypeMode = useCallback((mode: TypeMode) => {
+    typeModeRef.current = mode;
+    setTypeMode(mode);
+  }, []);
+
   // Toolbar Del Rows / Del Cols buttons → the effect-scoped structural deletes.
   const handleDeleteRows = useCallback(() => doDeleteRowsRef.current(), []);
   const handleDeleteColumns = useCallback(() => doDeleteColumnsRef.current(), []);
@@ -379,10 +394,10 @@ export default function Grid({ view, onResized }: GridProps) {
       () => store.getSelection(),
       () => store.getSelectionMode(),
     );
-    // Empty-in-M2 track lane (consensus/conservation land here in M4) and the
-    // whole-alignment minimap — both `Drawable`s on the same rAF loop, so they
-    // stay frame-synced with the grid under pan/zoom (the minimap's viewport
-    // rectangle follows; the track lane's future tracks scroll-sync for free).
+    // Track lane (the IUPAC consensus row over all rows) and the whole-alignment
+    // minimap — both `Drawable`s on the same rAF loop, so they stay frame-synced
+    // with the grid under pan/zoom (the minimap's viewport rectangle follows; the
+    // track lane's consensus cells scroll-sync via `colToX`).
     const track = new TrackLaneRenderer(trackRef.current!);
     const minimap = new MinimapLayer(minimapRef.current!);
     // Two canvases: the invert canvas (mix-blend-mode: difference) and the
@@ -644,6 +659,7 @@ export default function Grid({ view, onResized }: GridProps) {
           // bars (the view object is reused in place).
           renderer.invalidateContentCaches();
           minimap.invalidate();
+          track.invalidate(); // consensus is memoized by view identity too
           store.markDirty();
           // Tell App when the width actually changed so the header readout follows.
           if (v.width !== prevWidth) onResizedRef.current?.(v.width);
@@ -672,6 +688,7 @@ export default function Grid({ view, onResized }: GridProps) {
       store.updateDims(v.width, v.numRows);
       renderer.invalidateContentCaches();
       minimap.invalidate();
+      track.invalidate(); // consensus is memoized by view identity too
       store.markDirty();
       if (v.width !== prevWidth) onResizedRef.current?.(v.width);
     };
@@ -863,6 +880,34 @@ export default function Grid({ view, onResized }: GridProps) {
       showMsg(`Cut ${dims.cols} × ${dims.rows} (${shorten ? "shortened" : "masked"})`);
     };
     doCutRef.current = doCut;
+
+    // Keyboard residue entry: write `letter` at the cursor's ACTIVE cell, then
+    // advance the cursor one cell right. Two modes (the toolbar / Insert-key toggle):
+    //   - Replace (default): overwrite the cell in place — a width-preserving
+    //     `pasteOverwrite` of a 1×1 block (an in-place `SetCells`).
+    //   - Insert: splice a new column into the active sequence — `pasteInsert` with
+    //     shift-only, so this row's tail shifts right and the other rows trailing-pad
+    //     to stay equal-width (the alignment GROWS). The single-sequence indel-repair
+    //     gesture; a gap-column-everywhere insert (shift-all) is a one-flag pivot.
+    // Both reuse the Rust-tested paste primitives, so there is no new edit code, and
+    // ride `runEdit` — serialized by `editingRef` (a held key drops the in-flight
+    // keystroke; write + advance skip together, so no desync) and refreshing the
+    // consensus track + minimap + occupancy caches. No cursor ⇒ no-op (click/arrow to
+    // place one first). The advance uses `moveCursor`, which collapses any rectangle
+    // and scrolls the cursor into view; after an Insert grew the width, the post-edit
+    // `updateDims` has already run, so the +1 clamps against the new extent.
+    const doType = async (letter: string) => {
+      const v = viewRef.current;
+      if (!v) return;
+      const sel = store.getSelection();
+      if (!sel) return; // nothing to type into — need a cursor
+      const { row, col } = sel.active;
+      const insert = typeModeRef.current === "insert";
+      const ok = await runEdit(() =>
+        insert ? pasteInsert(row, col, [letter], false) : pasteOverwrite(row, col, [letter]),
+      );
+      if (ok) store.moveCursor(0, 1);
+    };
 
     // Run a STRUCTURAL delete (rows or columns): invoke the IPC op (returns the
     // post-delete dimensions), then re-sync the whole view from the authoritative
@@ -1171,6 +1216,24 @@ export default function Grid({ view, onResized }: GridProps) {
         void runResyncEdit(redoEdit);
         return;
       }
+      // The Insert key toggles the keyboard-entry mode (Replace ⇄ Insert), the text-
+      // editor convention; the toolbar toggle is the discoverable equivalent.
+      if (e.key === "Insert") {
+        e.preventDefault();
+        handleSetTypeMode(typeModeRef.current === "replace" ? "insert" : "replace");
+        return;
+      }
+      // Manual residue entry: a bare printable residue key (no Ctrl/Meta/Alt — Shift
+      // is allowed for capitals) writes that residue at the cursor in the current
+      // mode. Placed AFTER the Ctrl/⌘ shortcuts + Delete (so Ctrl+A still selects-all,
+      // Ctrl+C copies) and the `!ctrl && !meta && !alt` guard keeps AltGr letter
+      // combos out; placed BEFORE the nav block so arrows/Page (multi-char keys, not
+      // residues) fall through to it.
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && isResidueKey(e.key)) {
+        e.preventDefault();
+        void doType(e.key);
+        return;
+      }
       const corner = e.ctrlKey || e.metaKey;
       const shift = e.shiftKey;
       const FAR = Number.MAX_SAFE_INTEGER; // clamped to the content edge by the reducers
@@ -1449,6 +1512,8 @@ export default function Grid({ view, onResized }: GridProps) {
         onSetCutMode={handleSetCutMode}
         deleteMode={deleteMode}
         onSetDeleteMode={handleSetDeleteMode}
+        typeMode={typeMode}
+        onSetTypeMode={handleSetTypeMode}
         onDeleteRows={handleDeleteRows}
         onDeleteColumns={handleDeleteColumns}
         onCopy={doCopy}
@@ -1460,10 +1525,10 @@ export default function Grid({ view, onResized }: GridProps) {
         <div className="grid-corner" />
         <canvas ref={rulerRef} className="grid-ruler" />
         {/* Track lane (row 2): a left gutter label + the column-aligned lane
-            canvas. Empty in M2 (TrackLaneRenderer paints only chrome); M4 fills it
-            with the consensus row / conservation track. */}
+            canvas. TrackLaneRenderer paints the IUPAC consensus row over all rows,
+            scroll-synced and column-aligned to the grid. */}
         <div className="grid-track-corner" aria-hidden="true">
-          tracks
+          cons
         </div>
         <canvas ref={trackRef} className="grid-track" />
         <canvas ref={nameRef} className="grid-names" />
