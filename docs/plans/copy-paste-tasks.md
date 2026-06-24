@@ -153,7 +153,9 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       asserted the forward result; since shift-all emits one splice PER ROW (a larger inverse
       than shift-only's one-per-pasted-row), added undo + redo round-trip assertions to cover
       the inverse (advisor-flagged as the highest-risk path). Verify: align-core 25, iberalign
-      15, fmt ✓, typecheck ✓, 166 vitest ✓, build ✓. (GUI smoke pending.)
+      15, fmt ✓, typecheck ✓, 166 vitest ✓, build ✓. **GUI smoke PASSED 2026-06-24** (user:
+      "all works") — ragged-vs-aligned visible on an interior paste, `(kept aligned)` shows
+      only for All, undo/redo after shift-all round-trips, toggle dims in Overwrite.
 - [ ] **C4** (mostly absorbed by C5) remaining: alphabet warn on paste; paste size-guard;
       **grow-to-fit for paste-as-sequences** (today: clamp + warn). The Insert|Overwrite
       buttons + FASTA auto-detect landed in C5.

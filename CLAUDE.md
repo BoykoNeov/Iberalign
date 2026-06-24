@@ -200,7 +200,7 @@ dependency-light and surface toolchain/linker issues fast.
   (no auto-timeout; a passive `useEffect` keyed on the message arms capture-phase
   keydown/mousedown/wheel listeners that clear it — the effect runs post-event so the producing
   event can't self-clear; also cleared on file-open). **C3 within-insert shift-all toggle —
-  code complete + green (GUI smoke pending).** A third segmented toolbar toggle (`shift`
+  code complete + green; GUI smoke PASSED 2026-06-24 (user "all works").** A third segmented toolbar toggle (`shift`
   label + `Pasted | All`) wires the engine's already-tested `shift_all` flag (default
   `Pasted` = shift only the pasted rows / ragged; `All` = insert gaps in every row so columns
   stay aligned); the toggle is **disabled, not hidden, in Overwrite mode** (hiding would
