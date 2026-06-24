@@ -19,7 +19,9 @@ interface ToolbarProps {
   onSetFormat: (format: CopyFormat) => void;
   /** Copy the current selection (a no-op upstream when nothing is selected). */
   onCopy: () => void;
-  /** Ephemeral feedback ("Copied 3 × 12", a size warning), or `null`. */
+  /** Paste the clipboard over the selection (overwrite); no-op without one. */
+  onPaste: () => void;
+  /** Ephemeral feedback ("Copied 3 × 12", "Pasted …", a size warning), or `null`. */
   message: string | null;
 }
 
@@ -28,6 +30,7 @@ export default function Toolbar({
   copyFormat,
   onSetFormat,
   onCopy,
+  onPaste,
   message,
 }: ToolbarProps) {
   const hasSel = selInfo !== null;
@@ -51,6 +54,16 @@ export default function Toolbar({
         title="Copy the selected block to the clipboard (Ctrl/⌘+C)"
       >
         Copy
+      </button>
+
+      <button
+        type="button"
+        className="toolbar-btn"
+        onClick={onPaste}
+        disabled={!hasSel}
+        title="Paste the clipboard over the selection, overwriting in place (Ctrl/⌘+V)"
+      >
+        Paste
       </button>
 
       <span className="toolbar-toggle" role="group" aria-label="Copy format">

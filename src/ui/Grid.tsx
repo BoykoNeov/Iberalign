@@ -40,8 +40,9 @@ import StatusBar from "./StatusBar";
 import Toolbar from "./Toolbar";
 import { normalize, rectDims } from "../state/selection";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
-import { copyText } from "../ipc/clipboard";
-import { clearCells, undoEdit, redoEdit } from "../ipc/edit";
+import { parseClipboard } from "../model/paste";
+import { copyText, readClipboardText } from "../ipc/clipboard";
+import { clearCells, pasteOverwrite, undoEdit, redoEdit } from "../ipc/edit";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -130,6 +131,10 @@ export default function Grid({ view }: GridProps) {
   const [copyMsg, setCopyMsg] = useState<string | null>(null);
   const msgTimerRef = useRef<number | null>(null);
   const doCopyRef = useRef<() => void>(() => {});
+  // Paste bridge: `doPaste` is defined inside the mount effect (it needs the
+  // effect-scoped `runEdit`/`store`), so the toolbar button reaches it through
+  // this ref, set once on mount — same latest-callback idiom as `doCopyRef`.
+  const doPasteRef = useRef<() => void>(() => {});
 
   // Guards against overlapping edits: a held Ctrl+Z would otherwise fire
   // concurrent undo() invokes whose completion order Tauri doesn't guarantee.
@@ -179,6 +184,9 @@ export default function Grid({ view }: GridProps) {
     copyFormatRef.current = format;
     setCopyFormat(format);
   }, []);
+
+  // Toolbar Paste button → the effect-scoped paste flow (via the ref above).
+  const handlePaste = useCallback(() => doPasteRef.current(), []);
 
   // Mount once: build store/renderer/loop, attach input, start drawing. Has no
   // `view` dependency — the view-change effect below feeds dims; this keeps a new
@@ -413,9 +421,9 @@ export default function Grid({ view }: GridProps) {
     // empty buffer means a no-op (e.g. undo at the bottom of the stack) — skip the
     // patch. The in-place copy keeps the same `AlignmentView` (App's `view` prop is
     // untouched), so scroll + selection survive the edit.
-    const runEdit = async (op: () => Promise<Uint8Array>) => {
+    const runEdit = async (op: () => Promise<Uint8Array>): Promise<boolean> => {
       const v = viewRef.current;
-      if (!v || editingRef.current) return;
+      if (!v || editingRef.current) return false;
       editingRef.current = true;
       try {
         const bytes = await op();
@@ -426,13 +434,60 @@ export default function Grid({ view }: GridProps) {
           // edit doesn't show stale bars (the view object is reused in place).
           renderer.invalidateContentCaches();
           store.markDirty();
+          return true;
         }
+        return false;
       } catch (err) {
         showMsg(`Edit failed: ${String(err)}`);
+        return false;
       } finally {
         editingRef.current = false;
       }
     };
+
+    // Paste the system clipboard over the selection in OVERWRITE mode (C1). The
+    // clipboard read + parse happen OUTSIDE `runEdit` (whose try/catch covers only
+    // the edit IPC), so they guard a denied / non-text / empty clipboard
+    // themselves. The block anchors at the selection's top-left and is clamped to
+    // the alignment in Rust (the overrun is dropped/truncated); a clipped paste is
+    // flagged. On success the selection expands to the pasted block so the change —
+    // and its undo — visibly lands.
+    const doPaste = async () => {
+      const v = viewRef.current;
+      if (!v) return;
+      const sel = store.getSelection();
+      if (!sel) {
+        showMsg("Select where to paste first");
+        return;
+      }
+      let text: string;
+      try {
+        text = await readClipboardText();
+      } catch (err) {
+        showMsg(`Paste failed: ${String(err)}`);
+        return;
+      }
+      const rows = parseClipboard(text);
+      if (rows.length === 0) {
+        showMsg("Clipboard has no text to paste");
+        return;
+      }
+      const { r0, c0 } = normalize(sel);
+      const blockRows = rows.length;
+      const blockCols = rows.reduce((m, line) => Math.max(m, line.length), 0);
+      const clipped = r0 + blockRows > v.numRows || c0 + blockCols > v.width;
+      const ok = await runEdit(() => pasteOverwrite(r0, c0, rows));
+      if (!ok) return;
+      // Select the (clamped) pasted block.
+      store.setCursor(r0, c0);
+      store.setActive(Math.min(r0 + blockRows - 1, v.numRows - 1), Math.min(c0 + blockCols - 1, v.width - 1));
+      showMsg(
+        clipped
+          ? "Pasted (clipped to fit the alignment)"
+          : `Pasted ${blockCols} × ${blockRows} (overwrite)`,
+      );
+    };
+    doPasteRef.current = doPaste;
 
     // Keyboard cursor movement (cell is focusable). Arrows move the cursor (the
     // M2 arrow-PAN is gone — see selection-plan.md); Shift+arrows extend the
@@ -465,6 +520,14 @@ export default function Grid({ view }: GridProps) {
       if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
         e.preventDefault();
         void doCopyRef.current();
+        return;
+      }
+      // Paste (Ctrl/⌘+V) — overwrite the selection from the clipboard (C1; the
+      // width-changing insert modes land in later batches). `doPaste` reads + parses
+      // the clipboard, so a no-selection / empty-clipboard paste is a guarded no-op.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        void doPaste();
         return;
       }
       // Delete / Backspace — clear (mask to gaps) the selected rectangle. The
@@ -698,6 +761,7 @@ export default function Grid({ view }: GridProps) {
         copyFormat={copyFormat}
         onSetFormat={handleSetFormat}
         onCopy={doCopy}
+        onPaste={handlePaste}
         message={copyMsg}
       />
       <div className="grid-container" style={CHROME_VARS}>

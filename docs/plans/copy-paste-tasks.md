@@ -15,9 +15,9 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       mirror → `selInfo`, Toolbar render.
 - [x] Verify: typecheck ✓, 152 vitest ✓, `npm run build` ✓, `cargo build -p
       iberalign` ✓, `cargo fmt --check` ✓.
-- [ ] **GUI smoke (human):** `npm run tauri dev` → select a rect → Copy (and
-      Ctrl/⌘+C) → paste into a text editor; check Raw vs FASTA, gaps kept, the Sel
-      readout, the size-guard message on select-all of a big fixture.
+- [x] **GUI smoke (human, 2026-06-24): PASSED, all good.** `npm run tauri dev` →
+      select a rect → Copy (and Ctrl/⌘+C) → paste into a text editor; Raw vs FASTA,
+      gaps kept, the Sel readout, the size-guard message all confirmed.
 
 ## Batch B — Edit foundation ✅ (code complete + green; **GUI smoke PASSED** 2026-06-23)
 
@@ -79,7 +79,18 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
 
 ## Batch C — Paste
 
-- [ ] **C1** Paste overwrite (clipboard read perm + `readText`; parse; `SetCells`).
+- [x] **C1** Paste overwrite ✅ (code complete + green; GUI smoke deferred to after
+      C2 so the default *insert* mode exists — advisor). Clipboard read perm
+      (`clipboard-manager:allow-read-text`) + `readClipboardText` seam; pure
+      `model/paste.ts::parseClipboard` (split CRLF/LF, drop FASTA `>` headers so this
+      app's unwrapped FASTA copy round-trips, drop trailing blanks, keep internal
+      blanks) + 5 tests; Rust `paste_overwrite` cmd + `paste_overwrite_writes` helper
+      (clamps: drop rows past the end, truncate to remaining width — width-preserving,
+      reuses `SetCells`) + 3 tests; `ipc/edit.ts::pasteOverwrite`; `Grid` `doPaste`
+      (read+parse OUTSIDE `runEdit`, guards empty/denied clipboard; overflow → clip +
+      message; expands the selection to the pasted block), `Ctrl/⌘+V`, `runEdit` now
+      returns a `boolean`; Toolbar **Paste** button. Verify: cargo fmt/clippy ✓,
+      `cargo test -p iberalign` 8 ✓, typecheck ✓, 159 vitest ✓, build ✓.
 - [ ] **C2** Paste insert, shift-only-pasted-rows (default) — `InsertBlock`.
 - [ ] **C3** Paste insert, shift-all toggle.
 - [ ] **C4** FASTA auto-detect; alphabet warn; size-guard; multi-row geometry;

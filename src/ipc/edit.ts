@@ -20,6 +20,17 @@ export function clearCells(rect: CellRect): Promise<Uint8Array> {
   return editBuffer("clear_cells", { r0: rect.r0, c0: rect.c0, r1: rect.r1, c1: rect.c1 });
 }
 
+/**
+ * Paste a block of residue lines over the alignment in OVERWRITE mode, with the
+ * block's top-left at `(r0, c0)`. The block is clamped to the alignment bounds in
+ * Rust (lines past the last row dropped, each line truncated to the remaining
+ * width), so this stays width-preserving and returns the post-edit buffer like
+ * the other edits. The width-changing insert modes get their own wrappers later.
+ */
+export function pasteOverwrite(r0: number, c0: number, rows: string[]): Promise<Uint8Array> {
+  return editBuffer("paste_overwrite", { r0, c0, rows });
+}
+
 /** Undo the most recent edit. Empty result ⇒ nothing to undo. */
 export function undoEdit(): Promise<Uint8Array> {
   return editBuffer("undo_edit");

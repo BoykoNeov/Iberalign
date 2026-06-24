@@ -194,6 +194,37 @@ fn gap_fill_writes(r0: usize, r1: usize, c0: usize, c1: usize) -> Vec<CellWrite>
         .collect()
 }
 
+/// Overwrite writes pasting `rows` (residue lines) with the block's top-left at
+/// `(r0, c0)`, CLAMPED to the alignment: lines past the last row are dropped and
+/// each line is truncated to the columns remaining from `c0`. Width-preserving —
+/// it reuses `SetCells`, so paste-overwrite rides the same in-place transport as
+/// delete; growing the alignment to fit an oversized block is a later (insert)
+/// batch. An empty line writes nothing (its row is left unchanged), so internal
+/// blank lines in the block hold their row position.
+fn paste_overwrite_writes(ds: &Dataset, r0: usize, c0: usize, rows: &[String]) -> Vec<CellWrite> {
+    let num_rows = ds.alignment.num_rows();
+    let avail = ds.alignment.width.saturating_sub(c0);
+    rows.iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let row = r0 + i;
+            if row >= num_rows {
+                return None;
+            }
+            let mut bytes = line.as_bytes().to_vec();
+            bytes.truncate(avail);
+            if bytes.is_empty() {
+                return None;
+            }
+            Some(CellWrite {
+                row,
+                col: c0,
+                bytes,
+            })
+        })
+        .collect()
+}
+
 /// The post-edit render bytes: the full flattened buffer, or empty when nothing
 /// changed (the frontend then skips the in-place copy + repaint).
 fn edit_bytes(ds: &Dataset, changed: &[usize]) -> Vec<u8> {
@@ -226,6 +257,34 @@ pub async fn clear_cells(
         .as_mut()
         .ok_or_else(|| "no alignment loaded".to_string())?;
     let writes = gap_fill_writes(r0, r1, c0, c1);
+    let changed = history
+        .apply(ds, EditCmd::SetCells { writes })
+        .map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(edit_bytes(ds, &changed)))
+}
+
+/// Paste a block of residue lines over the alignment with its top-left at
+/// `(r0, c0)`, in OVERWRITE mode (in place; the block is clamped to bounds — see
+/// [`paste_overwrite_writes`]). Returns the post-edit render buffer (empty ⇒
+/// no-op), reversible through the edit history like every mutation. The frontend
+/// reads + parses the system clipboard into `rows`; the width-changing insert
+/// modes land in later batches. Errors if nothing is loaded or the rect is out of
+/// bounds (atomic — state untouched on error).
+#[tauri::command]
+pub async fn paste_overwrite(
+    r0: usize,
+    c0: usize,
+    rows: Vec<String>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<tauri::ipc::Response, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let writes = paste_overwrite_writes(ds, r0, c0, &rows);
     let changed = history
         .apply(ds, EditCmd::SetCells { writes })
         .map_err(|e| e.to_string())?;
@@ -332,5 +391,64 @@ mod tests {
         let ds = Dataset::from_records(&[rec("a", "ACGT")]);
         assert!(edit_bytes(&ds, &[]).is_empty());
         assert_eq!(edit_bytes(&ds, &[0]), b"ACGT");
+    }
+
+    #[test]
+    fn paste_overwrite_writes_clamps_to_bounds() {
+        // A 3-line block dropped at (0,2) of a 2×4 alignment: the 3rd line is past
+        // the last row (dropped) and each line truncates to width-c0 = 2 columns.
+        let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let rows = vec!["XXXX".to_string(), "YY".to_string(), "ZZZZ".to_string()];
+        let writes = paste_overwrite_writes(&ds, 0, 2, &rows);
+        assert_eq!(
+            writes,
+            vec![
+                CellWrite {
+                    row: 0,
+                    col: 2,
+                    bytes: b"XX".to_vec()
+                },
+                CellWrite {
+                    row: 1,
+                    col: 2,
+                    bytes: b"YY".to_vec()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn paste_overwrite_writes_skips_empty_lines() {
+        // A blank line writes nothing (its row is left as-is); the row index still
+        // advances so the next line lands on the right row.
+        let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let rows = vec!["".to_string(), "GG".to_string()];
+        let writes = paste_overwrite_writes(&ds, 0, 0, &rows);
+        assert_eq!(
+            writes,
+            vec![CellWrite {
+                row: 1,
+                col: 0,
+                bytes: b"GG".to_vec()
+            }]
+        );
+    }
+
+    #[test]
+    fn paste_overwrite_through_history_and_undo() {
+        // The edit path `paste_overwrite` runs, minus the Tauri State plumbing:
+        // build clamped writes, apply through the history, confirm the buffer and
+        // that undo restores it.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let rows = vec!["GG".to_string(), "CC".to_string()];
+        let writes = paste_overwrite_writes(&ds, 0, 1, &rows);
+        let changed = history
+            .apply(&mut ds, align_core::EditCmd::SetCells { writes })
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(flatten_buffer(&ds), b"AGGTTCCT");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
     }
 }

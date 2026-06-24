@@ -73,6 +73,32 @@ Companion to `copy-paste-plan.md` / `copy-paste-tasks.md`.
 - `src/render/Canvas2DRenderer.ts` — `GAP_GLYPH` (`-`); the letter-tier blit draws it
   for any gap byte (was: skip gaps) so gaps/deleted cells show a dash, not a blank.
 
+## Batch C1 (paste overwrite) — files
+
+**New**
+- `src/model/paste.ts` — pure `parseClipboard(text) → string[]`: split CRLF/LF, drop
+  FASTA `>` headers (this app's FASTA copy is unwrapped — header-strip round-trips it),
+  drop trailing blank lines, KEEP internal blanks (a blank line = "leave that row").
+  `src/model/paste.test.ts` covers it. Wrapped external FASTA = C4.
+
+**Edited**
+- `src-tauri/capabilities/default.json` — add `clipboard-manager:allow-read-text`.
+- `src/ipc/clipboard.ts` — `readClipboardText()` (`?? ""` so a non-text clipboard
+  reads as empty; the read can still reject → caller wraps it).
+- `src/ipc/edit.ts` — `pasteOverwrite(r0, c0, rows)` over the post-edit-buffer transport.
+- `src-tauri/src/commands.rs` — `paste_overwrite` cmd + `paste_overwrite_writes(ds, r0,
+  c0, rows)` helper (sibling of `gap_fill_writes`; clamps to bounds, width-preserving,
+  reuses `EditCmd::SetCells`) + 3 tests. `src-tauri/src/lib.rs` registers it.
+- `src/ui/Grid.tsx` — `runEdit` now returns `boolean`; effect-scoped `doPaste` (read +
+  parse outside `runEdit`; guards no-selection / empty / denied; overflow → clip +
+  message; expands the selection to the pasted block); `Ctrl/⌘+V`; `doPasteRef` +
+  body `handlePaste`. `src/ui/Toolbar.tsx` — **Paste** button + `onPaste` prop.
+
+**Semantics (C1):** anchor = selection top-left `(r0,c0)`; overflow → clip-to-fit +
+advisory message (grow-to-fit needs the C2 width-change path); bytes verbatim (alphabet
+warn = C4). Default mode is still overwrite here; the user's *insert* default arrives
+with C2's toggle — so the human GUI smoke waits until after C2.
+
 ## Seams for Batches C–D (paste/cut, building on the B foundation)
 
 - `crates/align-core/src/edit.rs` — `EditCmd` enum (variants: InsertGap, DeleteGap,
