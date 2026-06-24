@@ -206,9 +206,22 @@ dependency-light and surface toolchain/linker issues fast.
   stay aligned); the toggle is **disabled, not hidden, in Overwrite mode** (hiding would
   reflow the right-pinned message) — which needed a new `.toolbar-toggle button:disabled` CSS
   rule (the existing custom bg/color made a disabled toggle look active). The insert message
-  appends `(kept aligned)` for shift-all so the modes are distinguishable. **Remaining:**
-  leftover C4 (grow-to-fit for paste-as-sequences, alphabet-mismatch warn, paste size-guard);
-  Batch D = Cut (default = shorten). Detail in `docs/plans/copy-paste-{plan,context,tasks}.md`.
+  appends `(kept aligned)` for shift-all so the modes are distinguishable. **C4 leftovers —
+  code complete + green; GUI smoke pending.** Three polish items: (1) **alphabet warn on paste**
+  (frontend-pure `model/paste.ts::pasteAlphabetWarning` — advisory, warn-not-reject; flags
+  non-IUPAC-nucleotide LETTERS for DNA/RNA alignments, Protein never warns; computed once in
+  `doPaste` over `parseClipboard`, threaded into both paste paths, appended to the result
+  message → tone warn); (2) **paste size-guard** (`PASTE_TEXT_CAP` 10M chars, mirrors
+  `COPY_CELL_CAP`; `doPaste` refuses an over-cap clipboard before routing); (3) **grow-to-fit for
+  paste-as-sequences** — the alignment now WIDENS to the widest pasted sequence (existing rows
+  trailing-pad) instead of truncating, built on a NEW general engine primitive
+  **`EditCmd::Batch { commands }`** (atomic compound edit; sub-inverses reversed; rollback on
+  sub-command failure). Grow = `Batch[SpliceRows(pad existing rows), InsertRows(wider rows)]` =
+  one undo. A **blow-up guard** (`PASTE_GROW_CELL_CAP` 100M cells) falls back to clamp-to-width
+  when a huge sequence × a tall alignment would OOM (the only remaining `truncated > 0` case);
+  `pasteFasta` adds an "alignment widened to W" info note. align-core 28 / iberalign 17 / 172
+  vitest; clippy + fmt clean. **Remaining:** Batch D = Cut (default = shorten). Detail in
+  `docs/plans/copy-paste-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

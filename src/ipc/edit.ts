@@ -48,8 +48,10 @@ export function pasteInsert(
   return editBuffer("paste_insert", { r0, c0, rows, shiftAll });
 }
 
-/** Outcome of {@link pasteSequences}: rows inserted + how many were truncated to
- *  the alignment width (clamp + warn). Mirror of the Rust `PasteSeqDto`. */
+/** Outcome of {@link pasteSequences}: rows inserted + how many were truncated.
+ *  With grow-to-fit `truncated` is 0 in the common case (the alignment widens to
+ *  the widest sequence); it is only nonzero in the rare size-cap fallback. Mirror
+ *  of the Rust `PasteSeqDto`. */
 export interface PasteSeqResult {
   inserted: number;
   truncated: number;
@@ -58,9 +60,12 @@ export interface PasteSeqResult {
 /**
  * Paste FASTA from the clipboard as NEW sequences inserted at row index `at`. The
  * raw clipboard text is parsed in Rust (tolerant FASTA: wrapped lines, dup names,
- * `.`→`-`). Unlike the buffer-returning edits this returns a small JSON status —
- * the row count changed, so the caller re-syncs its view from `getAlignmentMeta` +
- * `getRenderBuffer` (the load path) rather than swapping a fixed-row buffer.
+ * `.`→`-`). GROW-to-fit: the alignment widens to the widest pasted sequence
+ * (existing rows trailing-pad), so nothing truncates except in the rare size-cap
+ * fallback. Unlike the buffer-returning edits this returns a small JSON status —
+ * the row count (and maybe width) changed, so the caller re-syncs its view from
+ * `getAlignmentMeta` + `getRenderBuffer` (the load path) rather than swapping a
+ * fixed-row buffer.
  */
 export function pasteSequences(at: number, text: string): Promise<PasteSeqResult> {
   return invoke<PasteSeqResult>("paste_sequences", { at, text });

@@ -420,9 +420,11 @@ pub async fn paste_insert(
 }
 
 /// Outcome of [`paste_sequences`]: how many rows were inserted and how many of
-/// them had to be truncated to the alignment width (clamp + warn — see
-/// [`paste_sequences_rows`]). Small JSON; the frontend re-fetches the meta +
-/// render buffer to rebuild its view (a row-count change reuses the load path).
+/// them had to be truncated. With grow-to-fit (see [`paste_sequences_cmd`]) the
+/// alignment widens to the widest record, so `truncated` is 0 in the common case
+/// — it is only nonzero in the blow-up-guard fallback ([`PASTE_GROW_CELL_CAP`]).
+/// Small JSON; the frontend re-fetches the meta + render buffer to rebuild its
+/// view (a row-count change reuses the load path).
 #[derive(Serialize)]
 pub struct PasteSeqDto {
     pub inserted: usize,
@@ -440,30 +442,82 @@ fn next_seq_id(ds: &Dataset) -> SeqId {
         .unwrap_or(0)
 }
 
-/// Build the [`RowData`] to insert as new sequences, plus the count truncated.
-/// Each record's gapped stream is padded/truncated to the alignment width (trailing
-/// gaps if short, cut if longer — clamp + warn, the grow-to-fit variant is a later
-/// follow-up). An empty alignment adopts the records' widest length. Fresh,
-/// non-colliding ids are assigned in record order.
-fn paste_sequences_rows(ds: &Dataset, records: &[RawRecord]) -> (Vec<RowData>, usize) {
-    if records.is_empty() {
-        return (Vec::new(), 0);
+/// Largest resulting render buffer (in cells) a GROW-to-fit paste will build. A
+/// pasted sequence far wider than the alignment forces EVERY existing row to pad
+/// out to that width — `(num_rows + inserted) * new_width` cells — which can dwarf
+/// the pasted text itself (a single 1 M-wide sequence into a 10 k-row alignment is
+/// ~10 G cells). Above this cap we DON'T grow: each record clamps to the current
+/// width instead (the only case `truncated` is nonzero). Set at the 10k×10k stress
+/// ceiling — the documented size the renderer already handles.
+const PASTE_GROW_CELL_CAP: usize = 100_000_000;
+
+/// The width a paste-as-sequences should target. GROW to the widest record when
+/// that stays within `cap` cells; otherwise keep the current width (the records
+/// clamp/truncate to it — the blow-up guard). An empty alignment (`num_rows == 0`)
+/// always adopts the widest: it has no existing rows to multiply, so the result is
+/// bounded by the pasted data itself. Records that already fit keep the old width.
+fn grow_target_width(
+    num_rows: usize,
+    old_width: usize,
+    widest: usize,
+    num_records: usize,
+    cap: usize,
+) -> usize {
+    if widest <= old_width {
+        return old_width; // records already fit
     }
-    let width = if ds.alignment.num_rows() > 0 {
-        ds.alignment.width
+    if num_rows == 0 {
+        return widest; // no existing rows to pad — bounded by the clipboard
+    }
+    if (num_rows + num_records).saturating_mul(widest) <= cap {
+        widest // grow to fit
     } else {
-        records.iter().map(|r| r.gapped.len()).max().unwrap_or(0)
-    };
+        old_width // growing would blow up the buffer → clamp instead
+    }
+}
+
+/// Build the edit inserting `records` as new sequences at row `at`, plus the count
+/// of records truncated. GROW-to-fit: the alignment widens to the widest record
+/// (every existing row trailing-pads), so nothing truncates — UNLESS the grown
+/// buffer would exceed [`PASTE_GROW_CELL_CAP`], where it falls back to clamping each
+/// record to the current width (the only `truncated > 0` case). Fresh, non-colliding
+/// ids are assigned in record order. When the alignment grows, the result is a
+/// [`EditCmd::Batch`] — pad every existing row, then insert — applied as one undo;
+/// otherwise a plain [`EditCmd::InsertRows`]. An empty `records` yields an empty
+/// `InsertRows` (a no-op the history won't record).
+fn paste_sequences_cmd(ds: &Dataset, at: usize, records: &[RawRecord]) -> (EditCmd, usize) {
+    if records.is_empty() {
+        return (
+            EditCmd::InsertRows {
+                at,
+                rows: Vec::new(),
+            },
+            0,
+        );
+    }
+    let num_rows = ds.alignment.num_rows();
+    let old_width = ds.alignment.width;
+    let widest = records.iter().map(|r| r.gapped.len()).max().unwrap_or(0);
+    let target = grow_target_width(
+        num_rows,
+        old_width,
+        widest,
+        records.len(),
+        PASTE_GROW_CELL_CAP,
+    );
+
+    // Each record padded (short) or truncated (only when target < widest, i.e. the
+    // capped fallback) to exactly `target`. Fresh ids continue past the current max.
     let mut next = next_seq_id(ds);
     let mut truncated = 0usize;
-    let rows = records
+    let rows: Vec<RowData> = records
         .iter()
         .map(|rec| {
-            if rec.gapped.len() > width {
+            if rec.gapped.len() > target {
                 truncated += 1;
             }
             let mut gapped = rec.gapped.clone();
-            gapped.resize(width, b'-'); // pad short / truncate long → exactly `width`
+            gapped.resize(target, b'-');
             let id = next;
             next += 1;
             RowData {
@@ -474,18 +528,43 @@ fn paste_sequences_rows(ds: &Dataset, records: &[RawRecord]) -> (Vec<RowData>, u
             }
         })
         .collect();
-    (rows, truncated)
+
+    let insert = EditCmd::InsertRows { at, rows };
+    // Grow path: also pad every existing row out to the new width, as one atomic
+    // batch (pad existing → insert wider rows). Skipped when there are no existing
+    // rows (an empty alignment just adopts the width via InsertRows).
+    if num_rows > 0 && target > old_width {
+        let pad = target - old_width;
+        let splices = (0..num_rows)
+            .map(|row| RowSplice {
+                row,
+                col: old_width,
+                remove: 0,
+                bytes: vec![b'-'; pad],
+            })
+            .collect();
+        return (
+            EditCmd::Batch {
+                commands: vec![EditCmd::SpliceRows { splices }, insert],
+            },
+            truncated,
+        );
+    }
+    (insert, truncated)
 }
 
 /// Paste FASTA from the clipboard as NEW sequences inserted at row index `at`
 /// (existing rows shift down). `text` is the raw clipboard string — parsed in Rust
 /// by the tolerant [`align_core::parse_fasta`] (joins wrapped lines, normalizes
 /// `.`→`-`, keeps gaps, disambiguates duplicate names), so wrapped external FASTA
-/// works too. Each sequence is clamped to the alignment width (trailing gaps /
-/// truncation; the count is reported so the UI can warn). Reversible through the
-/// edit history. Returns a small JSON [`PasteSeqDto`]; the frontend re-syncs its
-/// view from `get_alignment_meta` + `get_render_buffer` (a row-count change reuses
-/// the load path). Errors if nothing is loaded.
+/// works too. GROW-to-fit: the alignment widens to the widest pasted sequence
+/// (existing rows trailing-pad), so nothing truncates — except when the grown
+/// buffer would exceed the size cap, where each sequence clamps to the current
+/// width and the count is reported (see [`paste_sequences_cmd`]). Reversible
+/// through the edit history (a grow is one [`EditCmd::Batch`] = one undo). Returns
+/// a small JSON [`PasteSeqDto`]; the frontend re-syncs its view from
+/// `get_alignment_meta` + `get_render_buffer` (a row-count change reuses the load
+/// path). Errors if nothing is loaded.
 #[tauri::command]
 pub async fn paste_sequences(
     at: usize,
@@ -500,8 +579,7 @@ pub async fn paste_sequences(
     let ds = dataset
         .as_mut()
         .ok_or_else(|| "no alignment loaded".to_string())?;
-    let (rows, truncated) = paste_sequences_rows(ds, &out.records);
-    let inserted = rows.len();
+    let inserted = out.records.len();
     if inserted == 0 {
         return Ok(PasteSeqDto {
             inserted: 0,
@@ -509,9 +587,8 @@ pub async fn paste_sequences(
         });
     }
     let at = at.min(ds.alignment.num_rows()); // clamp a stale anchor to an append
-    history
-        .apply(ds, EditCmd::InsertRows { at, rows })
-        .map_err(|e| e.to_string())?;
+    let (cmd, truncated) = paste_sequences_cmd(ds, at, &out.records);
+    history.apply(ds, cmd).map_err(|e| e.to_string())?;
     Ok(PasteSeqDto {
         inserted,
         truncated,
@@ -761,50 +838,81 @@ mod tests {
     }
 
     #[test]
-    fn paste_sequences_rows_clamps_to_width_and_counts_truncated() {
-        // Into a width-4 alignment: a short record pads with trailing gaps, a long
-        // one truncates (and counts), and fresh ids continue past the max existing.
-        let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
-        let records = [rec("short", "GG"), rec("long", "CCCCCC")];
-        let (rows, truncated) = paste_sequences_rows(&ds, &records);
-        assert_eq!(truncated, 1);
-        assert_eq!(
-            rows,
-            vec![
-                RowData {
-                    id: 2,
-                    name: "short".to_string(),
-                    description: String::new(),
-                    gapped: b"GG--".to_vec(), // padded to width 4
-                },
-                RowData {
-                    id: 3,
-                    name: "long".to_string(),
-                    description: String::new(),
-                    gapped: b"CCCC".to_vec(), // truncated to width 4
-                },
-            ]
-        );
+    fn grow_target_width_picks_grow_clamp_or_keep() {
+        // Records already fit the current width → keep it (no grow, no truncation).
+        assert_eq!(grow_target_width(2, 4, 3, 1, 100), 4);
+        // A wider record, grown buffer within the cap → grow to the widest.
+        assert_eq!(grow_target_width(2, 4, 6, 1, 100), 6); // (2+1)*6 = 18 <= 100
+                                                           // A wider record, grown buffer over the cap → keep the old width (clamp).
+        assert_eq!(grow_target_width(2, 4, 6, 1, 10), 4); // (2+1)*6 = 18 > 10
+                                                          // An empty alignment always adopts the widest (no existing rows to multiply).
+        assert_eq!(grow_target_width(0, 0, 5, 2, 1), 5);
     }
 
     #[test]
-    fn paste_sequences_rows_empty_alignment_adopts_record_width() {
-        // With no rows yet, the inserted sequences establish the width (the widest).
+    fn paste_sequences_cmd_grows_to_fit_and_undo_restores_width() {
+        // Into width-4 rows, paste a width-6 sequence: GROW to 6 — a Batch that pads
+        // every existing row, then inserts the wide row. Nothing truncates.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let records = [rec("wide", "GGGGGG")];
+        let (cmd, truncated) = paste_sequences_cmd(&ds, 2, &records);
+        assert_eq!(truncated, 0);
+        assert!(matches!(cmd, EditCmd::Batch { .. }));
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.num_rows(), 3);
+        // Existing rows padded to width 6; the new row inserted at the end.
+        assert_eq!(flatten_buffer(&ds), b"ACGT--TTTT--GGGGGG");
+        assert_eq!(ds.sequences[2].name, "wide");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.num_rows(), 2);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn paste_sequences_cmd_no_grow_when_records_fit() {
+        // Records no wider than the alignment → a plain InsertRows (pad short ones),
+        // no truncation, width unchanged.
+        let ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let records = [rec("short", "GG"), rec("exact", "CCCC")];
+        let (cmd, truncated) = paste_sequences_cmd(&ds, 2, &records);
+        assert_eq!(truncated, 0);
+        match cmd {
+            EditCmd::InsertRows { at, rows } => {
+                assert_eq!(at, 2);
+                assert_eq!(rows[0].gapped, b"GG--"); // padded to width 4
+                assert_eq!(rows[1].gapped, b"CCCC");
+                assert_eq!(rows[0].id, 2); // fresh ids past the max existing
+                assert_eq!(rows[1].id, 3);
+            }
+            other => panic!("expected InsertRows, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paste_sequences_cmd_empty_alignment_adopts_widest() {
+        // No rows yet → a plain InsertRows establishing the width (the widest record).
         let ds = Dataset::default();
         let records = [rec("a", "ACG"), rec("b", "TTTTT")];
-        let (rows, truncated) = paste_sequences_rows(&ds, &records);
+        let (cmd, truncated) = paste_sequences_cmd(&ds, 0, &records);
         assert_eq!(truncated, 0);
-        assert_eq!(rows[0].gapped, b"ACG--"); // padded to the widest (5)
-        assert_eq!(rows[1].gapped, b"TTTTT");
-        assert_eq!(rows[0].id, 0);
-        assert_eq!(rows[1].id, 1);
+        match cmd {
+            EditCmd::InsertRows { at, rows } => {
+                assert_eq!(at, 0);
+                assert_eq!(rows[0].gapped, b"ACG--"); // padded to the widest (5)
+                assert_eq!(rows[1].gapped, b"TTTTT");
+            }
+            other => panic!("expected InsertRows, got {other:?}"),
+        }
     }
 
     #[test]
-    fn paste_sequences_rows_empty_records_is_noop() {
+    fn paste_sequences_cmd_empty_records_is_noop() {
         let ds = Dataset::from_records(&[rec("a", "ACGT")]);
-        let (rows, truncated) = paste_sequences_rows(&ds, &[]);
-        assert!(rows.is_empty());
+        let (cmd, truncated) = paste_sequences_cmd(&ds, 1, &[]);
         assert_eq!(truncated, 0);
+        assert!(matches!(cmd, EditCmd::InsertRows { rows, .. } if rows.is_empty()));
     }
 }

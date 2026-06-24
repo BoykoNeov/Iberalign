@@ -94,6 +94,18 @@ pub enum EditCmd {
         at: usize,
         count: usize,
     },
+    /// Apply several commands as ONE reversible unit. The sub-commands run in
+    /// order; the batch's inverse is each sub-command's inverse in REVERSE order.
+    /// The primitive behind compound edits — e.g. paste-as-sequences that GROWS
+    /// the alignment: pad every existing row to the new width ([`EditCmd::SpliceRows`]),
+    /// then insert the wider new rows ([`EditCmd::InsertRows`]), as one undo. Atomic:
+    /// if any sub-command fails, the already-applied ones are rolled back (their
+    /// inverses replayed), leaving the dataset untouched. Sub-commands may be
+    /// structural OR matrix, so it routes through [`apply_to_dataset`], never the
+    /// matrix-only [`apply`].
+    Batch {
+        commands: Vec<EditCmd>,
+    },
     InsertGap {
         rows: RowSel,
         col: usize,
@@ -196,11 +208,13 @@ pub fn apply(aln: &mut Alignment, cmd: EditCmd) -> Result<EditOutcome, EditError
     match cmd {
         EditCmd::SetCells { writes } => apply_set_cells(aln, writes),
         EditCmd::SpliceRows { splices } => apply_splice_rows(aln, splices),
-        // Structural commands need the whole `Dataset` (sequences + names), not
-        // just the matrix — `apply_to_dataset` intercepts them before they ever
-        // reach here. Reaching this arm is a routing bug, not a `todo!()`.
-        EditCmd::InsertRows { .. } | EditCmd::DeleteRows { .. } => {
-            unreachable!("InsertRows/DeleteRows are Dataset-level — route through apply_to_dataset")
+        // Structural / compound commands need the whole `Dataset` (sequences +
+        // names), not just the matrix — `apply_to_dataset` intercepts them before
+        // they ever reach here. Reaching this arm is a routing bug, not a `todo!()`.
+        EditCmd::InsertRows { .. } | EditCmd::DeleteRows { .. } | EditCmd::Batch { .. } => {
+            unreachable!(
+                "InsertRows/DeleteRows/Batch are Dataset-level — route through apply_to_dataset"
+            )
         }
         EditCmd::InsertGap { .. }
         | EditCmd::DeleteGap { .. }
@@ -491,6 +505,44 @@ fn resync_residues(ds: &mut Dataset, row: usize) {
     ds.sequences[row].residues = residues;
 }
 
+/// Apply a batch of commands as one atomic, reversible unit. Sub-commands run in
+/// order through [`apply_to_dataset`] (so each does its own structural/matrix
+/// dispatch + residue resync); the batch inverse is the collected sub-inverses in
+/// REVERSE order. On any sub-command error, the already-applied sub-commands are
+/// rolled back (their inverses replayed, newest first) before the error is
+/// returned, so the dataset is left untouched. An empty batch is a no-op.
+fn apply_batch(ds: &mut Dataset, commands: Vec<EditCmd>) -> Result<EditOutcome, EditError> {
+    let mut inverses: Vec<EditCmd> = Vec::with_capacity(commands.len());
+    let mut changed: Vec<usize> = Vec::new();
+    for cmd in commands {
+        match apply_to_dataset(ds, cmd) {
+            Ok(out) => {
+                changed.extend(out.changed_rows);
+                inverses.push(out.inverse);
+            }
+            Err(e) => {
+                // Roll back what we applied, newest first. These are engine-built
+                // inverses of edits that just succeeded, so they must re-apply
+                // cleanly — a failure here is an engine invariant violation.
+                while let Some(inv) = inverses.pop() {
+                    apply_to_dataset(ds, inv).expect("batch rollback inverse must apply");
+                }
+                return Err(e);
+            }
+        }
+    }
+    // The union of changed rows is only a non-empty marker here (whether the
+    // history records the batch + the frontend repaints); each sub-command already
+    // resynced its own rows, so these indexes are never re-used to index rows.
+    inverses.reverse();
+    changed.sort_unstable();
+    changed.dedup();
+    Ok(EditOutcome {
+        inverse: EditCmd::Batch { commands: inverses },
+        changed_rows: changed,
+    })
+}
+
 /// Apply a command to a whole [`Dataset`]: mutate the gapped alignment, then
 /// resync the derived ungapped residues for every changed row. Prefer this (or
 /// [`EditStack`]) over the bare matrix-level [`apply`], which a caller could
@@ -503,6 +555,8 @@ pub fn apply_to_dataset(ds: &mut Dataset, cmd: EditCmd) -> Result<EditOutcome, E
         // index-based residue resync (whose row indexes assume a stable row set).
         EditCmd::InsertRows { at, rows } => insert_rows(ds, at, rows),
         EditCmd::DeleteRows { at, count } => delete_rows(ds, at, count),
+        // A batch composes sub-commands (each routed back through here).
+        EditCmd::Batch { commands } => apply_batch(ds, commands),
         // Matrix commands mutate cells in existing rows: apply, then resync the
         // derived ungapped residues for the rows that changed.
         other => {
@@ -1044,5 +1098,99 @@ mod tests {
         assert!(changed.is_empty());
         assert!(!stack.can_undo());
         assert_eq!(ds.alignment.num_rows(), 1);
+    }
+
+    // ---- compound command (Batch) -----------------------------------------
+
+    #[test]
+    fn batch_applies_subcommands_in_order_and_one_undo_reverses_all() {
+        // A matrix edit (SetCells) then a width-growing SpliceRows, as one unit.
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT")]);
+        let mut stack = EditStack::new();
+        let changed = stack
+            .apply(
+                &mut ds,
+                EditCmd::Batch {
+                    commands: vec![
+                        set(vec![write(0, 0, "X")]),
+                        splice(vec![rsplice(0, 4, 0, "GG"), rsplice(1, 4, 0, "GG")]),
+                    ],
+                },
+            )
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(ds.alignment.rows[0].gapped, b"XCGTGG");
+        assert_eq!(ds.alignment.rows[1].gapped, b"TTTTGG");
+        assert_eq!(ds.alignment.width, 6);
+        // ONE undo reverses the WHOLE batch (sub-inverses replay in reverse).
+        stack.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"TTTT");
+        assert_eq!(ds.alignment.width, 4);
+    }
+
+    #[test]
+    fn batch_rolls_back_applied_subcommands_on_error() {
+        // First sub-command is valid (would mask row 0); the second writes out of
+        // bounds. The batch must leave the dataset untouched (atomic).
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT")]);
+        let err = apply_to_dataset(
+            &mut ds,
+            EditCmd::Batch {
+                commands: vec![set(vec![write(0, 0, "--")]), set(vec![write(9, 0, "X")])],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            EditError::RowOutOfBounds {
+                row: 9,
+                num_rows: 2
+            }
+        );
+        // The valid first sub-command was rolled back.
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"TTTT");
+    }
+
+    #[test]
+    fn batch_grow_then_insert_rows_round_trips() {
+        // The paste-as-sequences GROW shape: pad both existing rows from width 4 to
+        // 6, then insert a new width-6 row — one atomic, reversible unit. Exercises a
+        // batch mixing a matrix command (SpliceRows) and a structural one (InsertRows).
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT")]);
+        let mut stack = EditStack::new();
+        stack
+            .apply(
+                &mut ds,
+                EditCmd::Batch {
+                    commands: vec![
+                        splice(vec![rsplice(0, 4, 0, "--"), rsplice(1, 4, 0, "--")]),
+                        EditCmd::InsertRows {
+                            at: 2,
+                            rows: vec![row_data(7, "new", "GGGGGG")],
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+        assert_eq!(ds.alignment.num_rows(), 3);
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT--");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGGGGG");
+        assert_eq!(ds.sequences[2].name, "new");
+        assert_eq!(ds.sequences[2].residues, b"GGGGGG"); // derived, gaps dropped
+
+        // Undo removes the row AND trims the existing rows back to width 4.
+        stack.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 2);
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.sequences[0].residues, b"ACGT");
+        // Redo restores the grown, inserted state.
+        stack.redo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.num_rows(), 3);
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGGGGG");
     }
 }

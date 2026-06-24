@@ -40,7 +40,7 @@ import StatusBar from "./StatusBar";
 import Toolbar from "./Toolbar";
 import { normalize, rectDims } from "../state/selection";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
-import { looksLikeFasta, parseClipboard } from "../model/paste";
+import { looksLikeFasta, parseClipboard, pasteAlphabetWarning, PASTE_TEXT_CAP } from "../model/paste";
 import { copyText, readClipboardText } from "../ipc/clipboard";
 import { clearCells, pasteInsert, pasteOverwrite, pasteSequences, undoEdit, redoEdit } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
@@ -559,7 +559,7 @@ export default function Grid({ view, onResized }: GridProps) {
     // alignment width; we then re-sync the view (the row count grew) and select the
     // inserted block. Serialized via `editingRef`. Reads + parses are in Rust, so a
     // non-FASTA / empty clipboard simply inserts nothing (`inserted === 0`).
-    const pasteFasta = async (text: string) => {
+    const pasteFasta = async (text: string, alphaNote: string | null) => {
       const v = viewRef.current;
       if (!v || editingRef.current) return;
       const sel = store.getSelection();
@@ -571,17 +571,23 @@ export default function Grid({ view, onResized }: GridProps) {
           showMsg("Clipboard has no sequences to paste", "warn");
           return;
         }
+        const prevWidth = v.width;
         // Row count changed ⇒ rebuild from the authoritative meta + buffer.
         const [meta, bytes] = await Promise.all([getAlignmentMeta(), getRenderBuffer()]);
         applyResynced(bytes, meta.names);
         store.setCursor(at, 0);
         store.setActive(at + res.inserted - 1, Math.max(0, v.width - 1));
-        showMsg(
-          res.truncated > 0
-            ? `Inserted ${res.inserted} sequence${res.inserted > 1 ? "s" : ""} (${res.truncated} truncated to width ${v.width})`
-            : `Inserted ${res.inserted} sequence${res.inserted > 1 ? "s" : ""}`,
-          res.truncated > 0 ? "warn" : "info",
-        );
+        // Compose the readout. A grow-to-fit WIDENS the alignment (informational);
+        // truncated sequences (the rare size-cap fallback) or off-alphabet residues
+        // are warnings — either makes the whole message a warning.
+        const n = res.inserted;
+        const notes: string[] = [];
+        if (v.width > prevWidth) notes.push(`alignment widened to ${v.width}`);
+        if (res.truncated > 0) notes.push(`${res.truncated} truncated to width ${v.width}`);
+        if (alphaNote) notes.push(alphaNote);
+        const warn = res.truncated > 0 || alphaNote !== null;
+        const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
+        showMsg(`Inserted ${n} sequence${n > 1 ? "s" : ""}${suffix}`, warn ? "warn" : "info");
       } catch (err) {
         showMsg(`Paste failed: ${String(err)}`, "warn");
       } finally {
@@ -597,7 +603,7 @@ export default function Grid({ view, onResized }: GridProps) {
     // Both anchor at the selection's top-left; lines past the last row are dropped
     // (a block paste never adds rows — that's the FASTA path). On success the
     // selection expands to the pasted block so the change — and its undo — lands.
-    const pasteRawBlock = async (text: string) => {
+    const pasteRawBlock = async (text: string, alphaNote: string | null) => {
       const v = viewRef.current;
       if (!v) return;
       const sel = store.getSelection();
@@ -625,13 +631,15 @@ export default function Grid({ view, onResized }: GridProps) {
         store.setActive(r0 + keptRows - 1, c0 + w - 1);
       }
       // Note the shift scope (so shift-all vs shift-only is distinguishable in the
-      // readout) and any dropped rows; a drop makes the whole message a warning.
+      // readout), any dropped rows, and any off-alphabet residues; a dropped row or
+      // an off-alphabet note makes the whole message a warning.
       const verb = overwrite ? "Overwrote" : "Inserted";
       const notes: string[] = [];
       if (shiftAll) notes.push("kept aligned");
       if (dropped > 0) notes.push(`${dropped} row${dropped > 1 ? "s" : ""} past the end dropped`);
+      if (alphaNote) notes.push(alphaNote);
       const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
-      showMsg(`${verb} ${w} × ${keptRows}${suffix}`, dropped > 0 ? "warn" : "info");
+      showMsg(`${verb} ${w} × ${keptRows}${suffix}`, dropped > 0 || alphaNote ? "warn" : "info");
     };
 
     // Paste entry point (Ctrl/⌘+V + the toolbar button): read the clipboard once,
@@ -652,8 +660,22 @@ export default function Grid({ view, onResized }: GridProps) {
         showMsg("Clipboard has no text to paste", "warn");
         return;
       }
-      if (looksLikeFasta(text)) await pasteFasta(text);
-      else await pasteRawBlock(text);
+      // Size guard: an enormous clipboard would build a huge block / very wide row
+      // and freeze the UI — refuse it (mirrors the copy-side COPY_CELL_CAP). Cheap
+      // (one length read) and bounds the alphabet scan + IPC payload below.
+      if (text.length > PASTE_TEXT_CAP) {
+        showMsg(
+          `Clipboard too large to paste (${text.length} chars; limit ${PASTE_TEXT_CAP})`,
+          "warn",
+        );
+        return;
+      }
+      // Advisory alphabet check over the residue lines (FASTA headers + gaps are
+      // ignored inside `pasteAlphabetWarning`) — warn, never reject. Computed once
+      // here and threaded into both paste paths so the result message can note it.
+      const alphaNote = pasteAlphabetWarning(parseClipboard(text), v.meta.alphabet);
+      if (looksLikeFasta(text)) await pasteFasta(text, alphaNote);
+      else await pasteRawBlock(text, alphaNote);
     };
     doPasteRef.current = doPaste;
 

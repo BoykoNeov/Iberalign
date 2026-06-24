@@ -190,6 +190,43 @@ render — so undo/redo MUST re-sync authoritative dims+names (verify in the GUI
 **Deferred:** grow-to-fit for paste-as-sequences (today: clamp to width + warn on truncate);
 alphabet-mismatch warning; the within-insert shift-all toggle (C3).
 
+## Batch C4 (paste polish: alphabet warn + size-guard + grow-to-fit) — files
+
+**Engine (`crates/align-core`)**
+- `edit.rs` — new GENERAL primitive `EditCmd::Batch { commands: Vec<EditCmd> }` + `apply_batch`
+  (dispatched in `apply_to_dataset`; matrix-only `apply` joins it to the `InsertRows/DeleteRows`
+  `unreachable!` arm). Atomic compound edit: sub-commands run in order via `apply_to_dataset`
+  (each does its own structural/matrix dispatch + residue resync); the batch inverse is the
+  collected sub-inverses **reversed**; on any sub-command error the applied ones are rolled back
+  (inverses replayed newest-first) so the dataset is untouched. The `changed_rows` union is only
+  a non-empty marker (record + repaint) — each sub-command already resynced its own rows. 3 new
+  tests (in-order + one-undo, rollback-on-error, grow-then-insert round-trip incl. redo).
+
+**Command (`src-tauri`)**
+- `commands.rs` — `paste_sequences` is now **grow-to-fit**. `paste_sequences_rows` (clamp-only)
+  → `paste_sequences_cmd(ds, at, records) -> (EditCmd, truncated)`: GROW to the widest record
+  (the result is a `Batch[SpliceRows(pad every existing row), InsertRows(wider rows)]` = one
+  undo); plain `InsertRows` when records fit or the alignment is empty. `grow_target_width`
+  isolates the grow / clamp / keep decision (testable with a small cap); `PASTE_GROW_CELL_CAP`
+  (100M cells = the 10k×10k ceiling) is the **blow-up guard** — a sequence far wider than the
+  alignment would pad EVERY existing row out to it (`num_rows × new_width`), so above the cap it
+  falls back to clamp-to-width (the only `truncated > 0` case). `PasteSeqDto` doc updated; shape
+  unchanged. New tests: `grow_target_width_picks_grow_clamp_or_keep`, `paste_sequences_cmd_*`
+  (grows-and-undo / no-grow-when-fits / empty-alignment-adopts-widest / empty-records-noop).
+
+**Frontend**
+- `model/paste.ts` — `PASTE_TEXT_CAP` (10M chars) + `pasteAlphabetWarning(lines, alphabet)`
+  (advisory; nucleotide alignments flag non-IUPAC-nucleotide LETTERS, Protein never warns; gaps
+  / `*` / digits / case ignored; returns a `"N residues outside the X alphabet (e.g. …)"` string
+  or null). `paste.test.ts` +6.
+- `ipc/edit.ts` — `PasteSeqResult` + `pasteSequences` docs note grow-to-fit (`truncated` is the
+  rare cap fallback now).
+- `ui/Grid.tsx` — `doPaste`: **size-guard** (refuse over `PASTE_TEXT_CAP`), then compute the
+  **alphabet note** once over `parseClipboard(text)` and thread it into `pasteFasta` /
+  `pasteRawBlock`; both append it to the result message (presence → tone `warn`). `pasteFasta`
+  captures `prevWidth` and adds an `"alignment widened to W"` info note when grow widened the
+  alignment (mutually exclusive with the truncated note).
+
 ## Seams for Batches C–D (paste/cut, building on the B foundation)
 
 - `crates/align-core/src/edit.rs` — `EditCmd` enum (variants: InsertGap, DeleteGap,

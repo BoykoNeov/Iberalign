@@ -156,9 +156,33 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       15, fmt ✓, typecheck ✓, 166 vitest ✓, build ✓. **GUI smoke PASSED 2026-06-24** (user:
       "all works") — ragged-vs-aligned visible on an interior paste, `(kept aligned)` shows
       only for All, undo/redo after shift-all round-trips, toggle dims in Overwrite.
-- [ ] **C4** (mostly absorbed by C5) remaining: alphabet warn on paste; paste size-guard;
-      **grow-to-fit for paste-as-sequences** (today: clamp + warn). The Insert|Overwrite
-      buttons + FASTA auto-detect landed in C5.
+- [x] **C4** leftovers — **DONE + green; GUI smoke pending** (this batch). The three
+      remaining polish items (the Insert|Overwrite buttons + FASTA auto-detect landed in C5):
+      - **Alphabet warn on paste** (frontend-pure, advisory — warn, never reject). New
+        `model/paste.ts::pasteAlphabetWarning(lines, alphabet)`: flags residue LETTERS
+        outside the alignment's alphabet. Only DNA/RNA flag (non-nucleotide letters, e.g.
+        protein residues pasted into a DNA alignment — the IUPAC nucleotide set is accepted);
+        a Protein alignment accepts every letter ⇒ never warns. Gaps / `*` / digits / case
+        ignored. Computed ONCE in `Grid.doPaste` over `parseClipboard(text)` (headers/gaps
+        stripped) and threaded into both paste paths, appended to the result message (bumps
+        tone → warn). 6 new vitest tests.
+      - **Paste size-guard.** `PASTE_TEXT_CAP` (10M chars, mirrors `COPY_CELL_CAP`); `doPaste`
+        refuses an over-cap clipboard with a warn message before routing (cheap length check;
+        also bounds the alphabet scan + IPC payload).
+      - **Grow-to-fit for paste-as-sequences** (engine). Replaces clamp+truncate: the
+        alignment WIDENS to the widest pasted sequence (existing rows trailing-pad), so
+        nothing truncates — except the rare blow-up-guard fallback. Built on a new GENERAL
+        engine primitive **`EditCmd::Batch { commands }`** (atomic compound edit: sub-commands
+        run in order, batch inverse = sub-inverses REVERSED, rollback-on-failure; routes
+        through `apply_to_dataset` since sub-commands may be structural OR matrix). Grow =
+        `Batch[ SpliceRows(pad every existing row to the new width), InsertRows(the wider new
+        rows) ]` = one undo. `commands.rs`: `grow_target_width` (grow / clamp / keep decision +
+        `PASTE_GROW_CELL_CAP` = 100M-cell guard so one huge sequence × a tall alignment can't
+        OOM) + `paste_sequences_cmd`. `PasteSeqDto.truncated` is now 0 in the common case
+        (nonzero only in the cap fallback); `Grid.pasteFasta` adds an "alignment widened to W"
+        info note. align-core +3 tests (Batch order/rollback/grow-round-trip), iberalign +5
+        (`grow_target_width`, `paste_sequences_cmd` ×4). Verify: align-core 28, iberalign 17,
+        clippy (incl. iberalign) / fmt ✓, typecheck ✓, 172 vitest ✓, build ✓.
 
 ## Messages — info/warn tone + persist-until-action ✅ (this batch)
 
