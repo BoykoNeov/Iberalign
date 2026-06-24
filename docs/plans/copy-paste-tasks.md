@@ -156,8 +156,9 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       15, fmt ✓, typecheck ✓, 166 vitest ✓, build ✓. **GUI smoke PASSED 2026-06-24** (user:
       "all works") — ragged-vs-aligned visible on an interior paste, `(kept aligned)` shows
       only for All, undo/redo after shift-all round-trips, toggle dims in Overwrite.
-- [x] **C4** leftovers — **DONE + green; GUI smoke pending** (this batch). The three
-      remaining polish items (the Insert|Overwrite buttons + FASTA auto-detect landed in C5):
+- [x] **C4** leftovers — **DONE + green; GUI smoke PASSED 2026-06-24 (user "all works")** (this
+      batch). The three remaining polish items (the Insert|Overwrite buttons + FASTA auto-detect
+      landed in C5):
       - **Alphabet warn on paste** (frontend-pure, advisory — warn, never reject). New
         `model/paste.ts::pasteAlphabetWarning(lines, alphabet)`: flags residue LETTERS
         outside the alignment's alphabet. Only DNA/RNA flag (non-nucleotide letters, e.g.

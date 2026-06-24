@@ -207,7 +207,8 @@ dependency-light and surface toolchain/linker issues fast.
   reflow the right-pinned message) — which needed a new `.toolbar-toggle button:disabled` CSS
   rule (the existing custom bg/color made a disabled toggle look active). The insert message
   appends `(kept aligned)` for shift-all so the modes are distinguishable. **C4 leftovers —
-  code complete + green; GUI smoke pending.** Three polish items: (1) **alphabet warn on paste**
+  code complete + green; GUI smoke PASSED 2026-06-24 (user "all works").** Three polish items:
+  (1) **alphabet warn on paste**
   (frontend-pure `model/paste.ts::pasteAlphabetWarning` — advisory, warn-not-reject; flags
   non-IUPAC-nucleotide LETTERS for DNA/RNA alignments, Protein never warns; computed once in
   `doPaste` over `parseClipboard`, threaded into both paste paths, appended to the result
