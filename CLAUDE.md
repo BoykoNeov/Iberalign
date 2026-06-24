@@ -182,6 +182,27 @@ dependency-light and surface toolchain/linker issues fast.
   and `COLORBLIND_SCHEME` (CVD-safe) remain selectable via the registry. Glyph ink
   is a single black (`GLYPH_INK`) for every residue/scheme — `inkStyleFor` is now a
   uniform table. Asserted in `colors.test.ts` (`DEFAULT_SCHEME_ID === "vivid"`).
+- **Paste (Batch C) — code complete + green; GUI smoke PASSED (2026-06-24, user "all
+  works").** Clipboard → alignment, in three landed slices on the Batch-B edit foundation:
+  **C1** overwrite (clamp→later grow), **C2** insert shift-only (the first width-CHANGING
+  edit, via the general `EditCmd::SpliceRows` primitive; transport unified on
+  `AlignmentView.resizeContents`, so width-changing undo/redo works for free), **C5** (a)
+  **FASTA clipboard ⇒ insert NEW sequences** (not residues spliced into rows) — first
+  row-COUNT-changing edit, Dataset-level `EditCmd::InsertRows`/`DeleteRows` dispatched in
+  `apply_to_dataset`, `paste_sequences(at,text)` parses via tolerant `parse_fasta`, frontend
+  re-syncs through the LOAD path (`getAlignmentMeta`+`getRenderBuffer` → `replaceAll`); (b)
+  **Insert|Overwrite toggle** (default Insert) for raw block paste, Overwrite **grows-to-fit**
+  (never truncates horizontally; rows past the bottom dropped). **THE LANDMINE (fixed):** a
+  generic undo/redo can reverse a row-count change, so undo/redo route through a full
+  meta+buffer resync (`runResyncEdit`) — confirmed in the smoke. Routing is `looksLikeFasta`
+  (first non-blank line `>`). **Toolbar messages** carry a tone — `warn` (failures / dropped /
+  truncated rows) = **bold red**, `info` = plain — and **persist until the user's next action**
+  (no auto-timeout; a passive `useEffect` keyed on the message arms capture-phase
+  keydown/mousedown/wheel listeners that clear it — the effect runs post-event so the producing
+  event can't self-clear; also cleared on file-open). **Remaining:** C3 within-insert
+  shift-all toggle (engine done — toolbar wiring only); leftover C4 (grow-to-fit for
+  paste-as-sequences, alphabet-mismatch warn, paste size-guard); Batch D = Cut (default =
+  shorten). Detail in `docs/plans/copy-paste-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

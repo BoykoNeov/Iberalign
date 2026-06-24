@@ -113,7 +113,8 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       Verify: align-core 17 (+5 splice) ✓, iberalign 11 (+3 paste_insert) ✓, clippy/fmt
       ✓, typecheck ✓, 160 vitest ✓, build ✓.
 - [x] **C5** Paste FASTA as NEW sequences + Insert|Overwrite toggle ✅ (code complete +
-      green; GUI smoke pending). Two user asks landed together:
+      green; **GUI smoke PASSED 2026-06-24** — user: "all works"; the landmine
+      undo/redo-across-row-count path held). Two user asks landed together:
       - **FASTA paste ⇒ insert new sequences** (not splice residues into existing rows).
         New Dataset-level engine commands `EditCmd::InsertRows { at, rows: Vec<RowData> }`
         / `DeleteRows { at, count }` (symmetric inverse like `SpliceRows`; ids/names
@@ -142,11 +143,19 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       **grow-to-fit for paste-as-sequences** (today: clamp + warn). The Insert|Overwrite
       buttons + FASTA auto-detect landed in C5.
 
-## Messages — info/warn tone ✅ (this batch)
+## Messages — info/warn tone + persist-until-action ✅ (this batch)
 
-- [x] `showMsg(text, tone)`; `warn` (failures / dropped / truncated) → **bold red**, lingers
-      ~4.5s; `info` (copied / inserted) plain, ~2.5s. `Toolbar` `message` prop → `{text,
-      tone}`; `.toolbar-msg.warn` styling (light + dark). All call sites tagged.
+- [x] `showMsg(text, tone)`; `warn` (failures / dropped / truncated) → **bold red**;
+      `info` (copied / inserted) plain. `Toolbar` `message` prop → `{text, tone}`;
+      `.toolbar-msg.warn` styling (light + dark). All call sites tagged.
+- [x] **Messages no longer auto-expire** (user, 2026-06-24): the `setTimeout` auto-clear
+      (`msgTimerRef`, 4.5s/2.5s) is removed; a message PERSISTS until the user's next
+      action clears it (or a new message replaces it). A passive `useEffect` keyed on
+      `copyMsg` registers capture-phase `keydown`/`mousedown`/`wheel` window listeners
+      that clear it; because the effect runs AFTER the producing event has dispatched, that
+      event can never self-clear (no `armed` flag needed — advisor-confirmed). The `[view]`
+      effect also clears it on file-open so a prior file's message can't linger. Verify:
+      typecheck ✓, 166 vitest ✓, build ✓.
 
 ## Batch D — Cut
 

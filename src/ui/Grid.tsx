@@ -139,10 +139,11 @@ export default function Grid({ view, onResized }: GridProps) {
   // sequences.)
   const [pasteMode, setPasteMode] = useState<PasteMode>("insert");
   const pasteModeRef = useRef<PasteMode>("insert");
-  // Ephemeral toolbar message with a tone: `warn` (failures / dropped / truncated)
-  // shows bold red and lingers; `info` (copied / inserted) is plain and brief.
+  // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
+  // red, `info` (copied / inserted) is plain. The message PERSISTS — it does not
+  // time out; it clears when the user takes their next action (see the effect below)
+  // or when a new message replaces it.
   const [copyMsg, setCopyMsg] = useState<{ text: string; tone: "info" | "warn" } | null>(null);
-  const msgTimerRef = useRef<number | null>(null);
   const doCopyRef = useRef<() => void>(() => {});
   // Paste bridge: `doPaste` is defined inside the mount effect (it needs the
   // effect-scoped `runEdit`/`store`), so the toolbar button reaches it through
@@ -159,20 +160,32 @@ export default function Grid({ view, onResized }: GridProps) {
   const onResizedRef = useRef(onResized);
   onResizedRef.current = onResized;
 
-  // Flash an ephemeral message in the toolbar, auto-clearing after a moment. A
-  // `warn` message (a failure, dropped/truncated rows) lingers a little longer than
-  // an `info` one so it is not missed.
+  // Show a message in the toolbar. It stays until the user's next action clears it
+  // (or another message replaces it) — no auto-timeout, so a result/error can't be
+  // missed by looking away.
   const showMsg = useCallback((text: string, tone: "info" | "warn" = "info") => {
     setCopyMsg({ text, tone });
-    if (msgTimerRef.current !== null) window.clearTimeout(msgTimerRef.current);
-    msgTimerRef.current = window.setTimeout(
-      () => {
-        setCopyMsg(null);
-        msgTimerRef.current = null;
-      },
-      tone === "warn" ? 4500 : 2500,
-    );
   }, []);
+
+  // Clear the message on the user's next action. The listeners are registered by a
+  // passive effect, which runs AFTER the event that produced the message has
+  // finished dispatching — so that event can never fire these and self-clear. Any
+  // later keydown / mousedown / wheel clears it; capture phase so an inner handler
+  // calling stopPropagation can't swallow the clear. A message that produces a NEW
+  // message (e.g. paste again) just gets replaced — `copyMsg` identity changes and
+  // this effect re-arms for the new one.
+  useEffect(() => {
+    if (!copyMsg) return;
+    const clear = () => setCopyMsg(null);
+    window.addEventListener("keydown", clear, true);
+    window.addEventListener("mousedown", clear, true);
+    window.addEventListener("wheel", clear, true);
+    return () => {
+      window.removeEventListener("keydown", clear, true);
+      window.removeEventListener("mousedown", clear, true);
+      window.removeEventListener("wheel", clear, true);
+    };
+  }, [copyMsg]);
 
   // Copy the selected block to the clipboard in the current format. Stable (reads
   // store/view/format via refs), so the keydown handler bound once below can call
@@ -850,10 +863,6 @@ export default function Grid({ view, onResized }: GridProps) {
       names.dispose();
       selection.dispose();
       store.setSelectionListener(undefined);
-      if (msgTimerRef.current !== null) {
-        window.clearTimeout(msgTimerRef.current);
-        msgTimerRef.current = null;
-      }
       storeRef.current = null;
     };
   }, []);
@@ -868,6 +877,9 @@ export default function Grid({ view, onResized }: GridProps) {
     // stale name/position can't linger until the next pointer move.
     lastCellRef.current = null;
     setHover(null);
+    // A message about the previous file (e.g. "Inserted 3 sequences") would
+    // otherwise persist across the load — clear it.
+    setCopyMsg(null);
   }, [view]);
 
   // Zoom to an absolute cell size in CSS px (the status-bar slider). There is no
