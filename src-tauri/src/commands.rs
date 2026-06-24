@@ -3,7 +3,7 @@
 //! serializable DTOs so the engine types stay UI-agnostic.
 
 use crate::state::AppState;
-use align_core::{Alphabet, CellWrite, Dataset, EditCmd};
+use align_core::{Alphabet, CellWrite, Dataset, EditCmd, RowSplice};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
@@ -225,6 +225,59 @@ fn paste_overwrite_writes(ds: &Dataset, r0: usize, c0: usize, rows: &[String]) -
         .collect()
 }
 
+/// Splices for a paste-INSERT with the block's top-left at `(r0, c0)`. Each target
+/// row (`r0..r0+rows.len()`, clamped to the last row) gets its line gap-padded to
+/// the block width `W` (the widest KEPT line) and inserted at `c0`; every other row
+/// keeps equal width by inserting `W` gaps — at `c0` when `shift_all` (gaps go in
+/// everywhere, so the columns stay synchronized), or trailing otherwise (the
+/// default: only the pasted rows shift, de-aligning their right side). Returns no
+/// splices when `W == 0` (every kept line empty) ⇒ a no-op. Lines past the last row
+/// are dropped — an insert can't add rows. Unlike overwrite, this GROWS the width.
+fn paste_insert_splices(
+    ds: &Dataset,
+    r0: usize,
+    c0: usize,
+    rows: &[String],
+    shift_all: bool,
+) -> Vec<RowSplice> {
+    let num_rows = ds.alignment.num_rows();
+    let old_width = ds.alignment.width;
+    let w = rows
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| r0 + i < num_rows)
+        .map(|(_, line)| line.len())
+        .max()
+        .unwrap_or(0);
+    if w == 0 {
+        return Vec::new();
+    }
+    (0..num_rows)
+        .map(|row| {
+            if row >= r0 && row - r0 < rows.len() {
+                // Target row: its line, right-padded with gaps to the block width.
+                let line = rows[row - r0].as_bytes();
+                let mut seg = vec![b'-'; w];
+                seg[..line.len()].copy_from_slice(line);
+                RowSplice {
+                    row,
+                    col: c0,
+                    remove: 0,
+                    bytes: seg,
+                }
+            } else {
+                // Non-target row: W gaps, at c0 (shift-all) or trailing (shift-only).
+                RowSplice {
+                    row,
+                    col: if shift_all { c0 } else { old_width },
+                    remove: 0,
+                    bytes: vec![b'-'; w],
+                }
+            }
+        })
+        .collect()
+}
+
 /// The post-edit render bytes: the full flattened buffer, or empty when nothing
 /// changed (the frontend then skips the in-place copy + repaint).
 fn edit_bytes(ds: &Dataset, changed: &[usize]) -> Vec<u8> {
@@ -287,6 +340,37 @@ pub async fn paste_overwrite(
     let writes = paste_overwrite_writes(ds, r0, c0, &rows);
     let changed = history
         .apply(ds, EditCmd::SetCells { writes })
+        .map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(edit_bytes(ds, &changed)))
+}
+
+/// Paste a block of residue lines over the alignment with its top-left at
+/// `(r0, c0)`, in INSERT mode — the block is INSERTED at `c0` (the alignment GROWS
+/// in width), reversibly through the edit history. `shift_all` chooses how the
+/// other rows keep equal width: `false` (the default) trailing-pads them so only
+/// the pasted rows shift (de-aligning their right side); `true` inserts gaps at
+/// `c0` in every row so the columns stay synchronized. Returns the post-edit
+/// render buffer — now WIDER, so the frontend rebuilds its view from the new length
+/// (it derives the new width = bytes.len()/num_rows). The frontend reads + parses
+/// the system clipboard into `rows`. Errors if nothing is loaded.
+#[tauri::command]
+pub async fn paste_insert(
+    r0: usize,
+    c0: usize,
+    rows: Vec<String>,
+    shift_all: bool,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<tauri::ipc::Response, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+    let splices = paste_insert_splices(ds, r0, c0, &rows, shift_all);
+    let changed = history
+        .apply(ds, EditCmd::SpliceRows { splices })
         .map_err(|e| e.to_string())?;
     Ok(tauri::ipc::Response::new(edit_bytes(ds, &changed)))
 }
@@ -432,6 +516,56 @@ mod tests {
                 bytes: b"GG".to_vec()
             }]
         );
+    }
+
+    #[test]
+    fn paste_insert_splices_drops_rows_past_end() {
+        // A 2-line block but only 1 row exists: the 2nd line is dropped, and the
+        // block width is the widest KEPT line ("GG" = 2, not "TTT").
+        let ds = Dataset::from_records(&[rec("a", "ACGT")]);
+        let splices =
+            paste_insert_splices(&ds, 0, 0, &["GG".to_string(), "TTT".to_string()], false);
+        assert_eq!(
+            splices,
+            vec![RowSplice {
+                row: 0,
+                col: 0,
+                remove: 0,
+                bytes: b"GG".to_vec()
+            }]
+        );
+    }
+
+    #[test]
+    fn paste_insert_shift_only_grows_width_and_undo_restores() {
+        // Insert "GG" into row 0 at col 1; the other row trailing-pads to stay
+        // equal-width (shift-only de-aligns row 0's right side).
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let splices = paste_insert_splices(&ds, 0, 1, &["GG".to_string()], false);
+        let changed = history
+            .apply(&mut ds, align_core::EditCmd::SpliceRows { splices })
+            .unwrap();
+        assert!(!changed.is_empty());
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(flatten_buffer(&ds), b"AGGCGTTTTT--");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    #[test]
+    fn paste_insert_shift_all_keeps_columns_aligned() {
+        // shift_all inserts the W gaps at c0 in the OTHER rows too, so column
+        // positions stay synchronized across rows.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT")]);
+        let mut history = align_core::EditStack::new();
+        let splices = paste_insert_splices(&ds, 0, 1, &["GG".to_string()], true);
+        history
+            .apply(&mut ds, align_core::EditCmd::SpliceRows { splices })
+            .unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(flatten_buffer(&ds), b"AGGCGTT--TTT");
     }
 
     #[test]

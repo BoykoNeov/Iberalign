@@ -13,8 +13,13 @@ import type { AlignmentMeta } from "./types";
  * gaps — see `isGap`).
  */
 export class AlignmentView {
-  readonly buffer: Uint8Array;
-  readonly meta: AlignmentMeta;
+  // Mutable so a width-changing edit can swap in the new (longer/shorter) buffer
+  // and updated width on the SAME view object (see `resizeContents`) — the
+  // renderer's view ref and App's `view` prop stay identical, so scroll/selection
+  // survive and Grid's `[view]` effect doesn't re-fire. External code reads these;
+  // only `resizeContents` reassigns them.
+  buffer: Uint8Array;
+  meta: AlignmentMeta;
 
   constructor(buffer: Uint8Array, meta: AlignmentMeta) {
     const expected = meta.width * meta.numRows;
@@ -56,20 +61,30 @@ export class AlignmentView {
   }
 
   /**
-   * Overwrite the buffer contents in place from a full-size post-edit buffer
-   * (same `width × numRows`). Mutates the existing `Uint8Array`, so the
-   * renderer's view ref and any live row subarrays stay valid and no new view is
-   * allocated (preserving scroll + selection); the caller marks the store dirty
-   * to repaint. Throws on a length mismatch — a width-changing edit must rebuild
-   * the view instead of patching it.
+   * Swap in a full post-edit render buffer, deriving the (possibly new) width from
+   * its length. The row count never changes under an edit (insert/overwrite/cut
+   * touch columns, not rows), so `newWidth = bytes.length / numRows`. Reassigns
+   * `buffer` + `meta.width` on THIS view object — same object identity, so the
+   * renderer's ref and App's `view` prop stay valid and Grid's `[view]` effect
+   * doesn't re-fire; the caller updates the store dims (`updateDims`) and repaints.
+   * Handles both width-preserving edits (delete, overwrite) and width-changing
+   * ones (paste-insert, and their undo/redo) through one path. Throws if the new
+   * length isn't a whole number of rows.
    */
-  replaceContents(bytes: Uint8Array): void {
-    if (bytes.length !== this.buffer.length) {
+  resizeContents(bytes: Uint8Array): void {
+    if (this.numRows === 0) {
+      if (bytes.length !== 0) {
+        throw new Error(`edit buffer length ${bytes.length} for a 0-row alignment`);
+      }
+      return;
+    }
+    if (bytes.length % this.numRows !== 0) {
       throw new Error(
-        `edit buffer length ${bytes.length} != current ${this.buffer.length} ` +
-          `(${this.width}×${this.numRows}); width-changing edits must rebuild the view`,
+        `edit buffer length ${bytes.length} is not a whole number of rows ` +
+          `(numRows ${this.numRows})`,
       );
     }
-    this.buffer.set(bytes);
+    this.buffer = bytes;
+    this.meta = { ...this.meta, width: bytes.length / this.numRows };
   }
 }

@@ -91,10 +91,32 @@ Companion to `copy-paste-plan.md` / `copy-paste-context.md`.
       message; expands the selection to the pasted block), `Ctrl/⌘+V`, `runEdit` now
       returns a `boolean`; Toolbar **Paste** button. Verify: cargo fmt/clippy ✓,
       `cargo test -p iberalign` 8 ✓, typecheck ✓, 159 vitest ✓, build ✓.
-- [ ] **C2** Paste insert, shift-only-pasted-rows (default) — `InsertBlock`.
-- [ ] **C3** Paste insert, shift-all toggle.
+- [x] **C2** Paste insert, shift-only-pasted-rows (default) ✅ (code complete + green;
+      GUI smoke deferred to batch end). The first **width-CHANGING** edit. Built on a
+      general engine primitive `EditCmd::SpliceRows { Vec<RowSplice{row,col,remove,bytes}> }`
+      (chosen over a dedicated `InsertBlock`/`DeleteBlock` because per-splice old-byte
+      capture gives a symmetric inverse — insert and the future cut-shorten are the same
+      primitive, no inverse-coupling). Atomic: bounds pre-checked; the **equal-width
+      result is a real `EditError::WidthMismatch`** (advisor — not a `debug_assert`,
+      which would vanish in release and ship a corrupt buffer); one-splice-per-row IS a
+      `debug_assert`. `apply` sets `aln.width` from the post-splice rows. Command
+      `paste_insert(r0,c0,rows,shift_all)` + `paste_insert_splices` helper (target rows
+      insert their gap-padded line at c0; others insert W gaps trailing (shift-only) or
+      at c0 (shift-all) — **both flag paths implemented + tested now**; only `shift_all=
+      false` wired in the UI, the toggle is C3). **Transport unified on `resizeContents`**:
+      replaced `replaceContents` (in-place, threw on width change) — derives newWidth =
+      bytes.len/numRows, reassigns buffer + meta.width on the SAME view object;
+      `runEdit` always uses it + new `store.updateDims` (re-clamps, KEEPS scroll +
+      selection, clamps+notifies on shrink). This makes width-changing **undo/redo** work
+      for free. `App` header width follows via an `onResized` callback. `Grid.doPaste` →
+      insert (shift-only), selects the inserted block, messages dropped overflow rows.
+      Verify: align-core 17 (+5 splice) ✓, iberalign 11 (+3 paste_insert) ✓, clippy/fmt
+      ✓, typecheck ✓, 160 vitest ✓, build ✓.
+- [ ] **C3** Paste insert, shift-all toggle — **engine already done** (the `shift_all`
+      flag + tests); this is the toolbar toggle wiring only.
 - [ ] **C4** FASTA auto-detect; alphabet warn; size-guard; multi-row geometry;
-      Insert|Overwrite + shift-mode toggle buttons in the toolbar.
+      Insert|Overwrite + shift-mode toggle buttons in the toolbar (re-wires C1's
+      `pasteOverwrite`, which stays in `ipc/edit.ts` ready for the toggle).
 
 ## Batch D — Cut
 

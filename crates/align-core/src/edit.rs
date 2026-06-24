@@ -30,6 +30,19 @@ pub struct CellWrite {
     pub bytes: Vec<u8>,
 }
 
+/// Replace `gapped[col..col+remove]` with `bytes` in one row — the building block
+/// of width-CHANGING edits (insert/delete a contiguous run within a row). An
+/// insert is `remove == 0`; a delete is `bytes` shorter than `remove`. The
+/// building block of [`EditCmd::SpliceRows`], whose callers build at most one
+/// splice per row so that all rows end at one shared width.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowSplice {
+    pub row: usize,
+    pub col: usize,
+    pub remove: usize,
+    pub bytes: Vec<u8>,
+}
+
 /// A reversible edit. Applying a command returns its inverse for the undo
 /// stack and reports which rows changed so the frontend can patch its buffer.
 #[derive(Clone, Debug)]
@@ -39,6 +52,14 @@ pub enum EditCmd {
     /// behind delete-to-gap (mask) and paste-overwrite.
     SetCells {
         writes: Vec<CellWrite>,
+    },
+    /// Splice contiguous runs within rows — the primitive behind width-CHANGING
+    /// edits (paste-insert; cut-shorten later). Each [`RowSplice`] replaces a run
+    /// in one row; the inverse is another `SpliceRows` (every splice captures the
+    /// bytes it removed). Callers MUST keep all rows equal-width — apply validates
+    /// it and rejects a ragged result without mutating.
+    SpliceRows {
+        splices: Vec<RowSplice>,
     },
     InsertGap {
         rows: RowSel,
@@ -87,6 +108,15 @@ pub enum EditError {
         end: usize,
         width: usize,
     },
+    /// A [`EditCmd::SpliceRows`] set would leave rows of differing widths (it must
+    /// keep the single-width invariant). Reported before any mutation, so the
+    /// alignment is untouched. `row` is the first row whose resulting width `got`
+    /// diverges from the shared `expected` width.
+    WidthMismatch {
+        row: usize,
+        got: usize,
+        expected: usize,
+    },
 }
 
 impl fmt::Display for EditError {
@@ -99,6 +129,12 @@ impl fmt::Display for EditError {
                 write!(
                     f,
                     "write reaching col {end} exceeds width {width} in row {row}"
+                )
+            }
+            EditError::WidthMismatch { row, got, expected } => {
+                write!(
+                    f,
+                    "splice would leave row {row} at width {got}, not the shared {expected}"
                 )
             }
         }
@@ -126,6 +162,7 @@ pub struct EditOutcome {
 pub fn apply(aln: &mut Alignment, cmd: EditCmd) -> Result<EditOutcome, EditError> {
     match cmd {
         EditCmd::SetCells { writes } => apply_set_cells(aln, writes),
+        EditCmd::SpliceRows { splices } => apply_splice_rows(aln, splices),
         EditCmd::InsertGap { .. }
         | EditCmd::DeleteGap { .. }
         | EditCmd::SlideResidues { .. }
@@ -186,6 +223,101 @@ fn apply_set_cells(aln: &mut Alignment, writes: Vec<CellWrite>) -> Result<EditOu
             writes: inverse_writes,
         },
         changed_rows,
+    })
+}
+
+fn apply_splice_rows(
+    aln: &mut Alignment,
+    splices: Vec<RowSplice>,
+) -> Result<EditOutcome, EditError> {
+    let num_rows = aln.rows.len();
+
+    // 1. Validate bounds for every splice BEFORE mutating (atomic apply).
+    for s in &splices {
+        let row = aln.rows.get(s.row).ok_or(EditError::RowOutOfBounds {
+            row: s.row,
+            num_rows,
+        })?;
+        let end = s.col + s.remove;
+        if end > row.gapped.len() {
+            return Err(EditError::ColOutOfBounds {
+                row: s.row,
+                end,
+                width: row.gapped.len(),
+            });
+        }
+    }
+
+    // At most one splice per row. Length-changing splices to the same row would
+    // shift each other's columns (the reverse-replay trick `SetCells` uses for
+    // in-place overlaps does not survive a length change), so the primitive does
+    // not support it — its callers build one splice per row. A violation is a
+    // caller bug, not user input, so this is a debug assert, not a `Result` error.
+    debug_assert!(
+        {
+            let mut rows: Vec<usize> = splices.iter().map(|s| s.row).collect();
+            rows.sort_unstable();
+            rows.windows(2).all(|w| w[0] != w[1])
+        },
+        "SpliceRows requires at most one splice per row"
+    );
+
+    // 2. Every row must end at one shared width (the single-width invariant). A
+    // spliced row's resulting length is `current + inserted - removed`; a row with
+    // no splice keeps its current length. Compute these WITHOUT mutating, so a
+    // ragged splice set errors atomically (state untouched) — this guards real
+    // corruption (a wrong `width` over differing-length rows) and so is a `Result`
+    // error, not a debug assert. `current + bytes - remove` can't underflow: the
+    // bounds check above guarantees `remove <= current`.
+    let mut result_len: Vec<usize> = aln.rows.iter().map(|r| r.gapped.len()).collect();
+    for s in &splices {
+        let cur = aln.rows[s.row].gapped.len();
+        result_len[s.row] = cur + s.bytes.len() - s.remove;
+    }
+    let target = result_len.first().copied().unwrap_or(aln.width);
+    for (row, &len) in result_len.iter().enumerate() {
+        if len != target {
+            return Err(EditError::WidthMismatch {
+                row,
+                got: len,
+                expected: target,
+            });
+        }
+    }
+
+    // 3. Mutate: splice each row, capturing the removed bytes for the inverse. Each
+    // splice is on a distinct row (asserted above), so the inverse order is
+    // irrelevant — no reverse needed (unlike the same-row overlaps `SetCells`
+    // replays in reverse).
+    let mut inverse: Vec<RowSplice> = Vec::with_capacity(splices.len());
+    let mut changed: Vec<usize> = Vec::with_capacity(splices.len());
+    for s in &splices {
+        let row = &mut aln.rows[s.row];
+        let end = s.col + s.remove;
+        let old: Vec<u8> = row
+            .gapped
+            .splice(s.col..end, s.bytes.iter().copied())
+            .collect();
+        row.invalidate_index();
+        inverse.push(RowSplice {
+            row: s.row,
+            col: s.col,
+            remove: s.bytes.len(),
+            bytes: old,
+        });
+        changed.push(s.row);
+    }
+
+    if !changed.is_empty() {
+        aln.width = target;
+        aln.invalidate_caches();
+    }
+    changed.sort_unstable();
+    changed.dedup();
+
+    Ok(EditOutcome {
+        inverse: EditCmd::SpliceRows { splices: inverse },
+        changed_rows: changed,
     })
 }
 
@@ -308,6 +440,19 @@ mod tests {
         EditCmd::SetCells { writes }
     }
 
+    fn rsplice(row: usize, col: usize, remove: usize, bytes: &str) -> RowSplice {
+        RowSplice {
+            row,
+            col,
+            remove,
+            bytes: bytes.as_bytes().to_vec(),
+        }
+    }
+
+    fn splice(splices: Vec<RowSplice>) -> EditCmd {
+        EditCmd::SpliceRows { splices }
+    }
+
     fn dataset(records: &[(&str, &str)]) -> Dataset {
         let recs: Vec<RawRecord> = records
             .iter()
@@ -391,6 +536,101 @@ mod tests {
             }
         );
         assert_eq!(a.rows[0].gapped, b"ACGT");
+    }
+
+    #[test]
+    fn splice_inserts_block_and_grows_width() {
+        // The shift-only paste shape: insert "GGG" into the target row 0 at col 2,
+        // and trailing-pad the other row with 3 gaps so both stay equal-width.
+        let mut a = aln(&["ACGT", "TTTT"]);
+        let out = apply(
+            &mut a,
+            splice(vec![rsplice(0, 2, 0, "GGG"), rsplice(1, 4, 0, "---")]),
+        )
+        .unwrap();
+        assert_eq!(a.rows[0].gapped, b"ACGGGGT");
+        assert_eq!(a.rows[1].gapped, b"TTTT---");
+        assert_eq!(a.width, 7);
+        // Inverse deletes the inserted run from each row, restoring width 4.
+        apply(&mut a, out.inverse).unwrap();
+        assert_eq!(a.rows[0].gapped, b"ACGT");
+        assert_eq!(a.rows[1].gapped, b"TTTT");
+        assert_eq!(a.width, 4);
+    }
+
+    #[test]
+    fn splice_deletes_run_and_shrinks_width() {
+        // The same primitive does deletion (the future cut-shorten): remove 2 cols
+        // at col 1 from both rows (width 4 → 2), then the inverse restores them.
+        // Also exercises the `current + bytes - remove` length math with remove > 0.
+        let mut a = aln(&["ACGT", "TTTT"]);
+        let out = apply(
+            &mut a,
+            splice(vec![rsplice(0, 1, 2, ""), rsplice(1, 1, 2, "")]),
+        )
+        .unwrap();
+        assert_eq!(a.rows[0].gapped, b"AT");
+        assert_eq!(a.rows[1].gapped, b"TT");
+        assert_eq!(a.width, 2);
+        apply(&mut a, out.inverse).unwrap();
+        assert_eq!(a.rows[0].gapped, b"ACGT");
+        assert_eq!(a.rows[1].gapped, b"TTTT");
+        assert_eq!(a.width, 4);
+    }
+
+    #[test]
+    fn splice_ragged_result_errors_atomically() {
+        // Growing only row 0 would leave it wider than row 1 — rejected before any
+        // mutation (the single-width invariant).
+        let mut a = aln(&["ACGT", "TTTT"]);
+        let err = apply(&mut a, splice(vec![rsplice(0, 0, 0, "XX")])).unwrap_err();
+        assert_eq!(
+            err,
+            EditError::WidthMismatch {
+                row: 1,
+                got: 4,
+                expected: 6
+            }
+        );
+        assert_eq!(a.rows[0].gapped, b"ACGT");
+        assert_eq!(a.rows[1].gapped, b"TTTT");
+        assert_eq!(a.width, 4);
+    }
+
+    #[test]
+    fn splice_out_of_bounds_col_errors_atomically() {
+        let mut a = aln(&["ACGT"]);
+        let err = apply(&mut a, splice(vec![rsplice(0, 3, 3, "")])).unwrap_err();
+        assert_eq!(
+            err,
+            EditError::ColOutOfBounds {
+                row: 0,
+                end: 6,
+                width: 4
+            }
+        );
+        assert_eq!(a.rows[0].gapped, b"ACGT");
+    }
+
+    #[test]
+    fn stack_width_changing_splice_undo_restores_width_and_residues() {
+        let mut ds = dataset(&[("a", "ACGT"), ("b", "TTTT")]);
+        let mut stack = EditStack::new();
+        stack
+            .apply(
+                &mut ds,
+                splice(vec![rsplice(0, 2, 0, "GGG"), rsplice(1, 4, 0, "---")]),
+            )
+            .unwrap();
+        assert_eq!(ds.alignment.width, 7);
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGGGGT");
+        // Derived residues resync on the changed rows (row 1's trailing gaps drop).
+        assert_eq!(ds.sequences[0].residues, b"ACGGGGT");
+        assert_eq!(ds.sequences[1].residues, b"TTTT");
+        stack.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.sequences[0].residues, b"ACGT");
     }
 
     #[test]

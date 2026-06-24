@@ -20,6 +20,7 @@ pub fn run() {
             commands::get_render_buffer,
             commands::clear_cells,
             commands::paste_overwrite,
+            commands::paste_insert,
             commands::undo_edit,
             commands::redo_edit
         ])

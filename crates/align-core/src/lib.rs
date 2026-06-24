@@ -23,6 +23,8 @@ pub mod model;
 pub mod parse;
 
 pub use composition::Composition;
-pub use edit::{apply_to_dataset, CellWrite, EditCmd, EditError, EditOutcome, EditStack};
+pub use edit::{
+    apply_to_dataset, CellWrite, EditCmd, EditError, EditOutcome, EditStack, RowSplice,
+};
 pub use model::{AlignedRow, Alignment, Alphabet, Dataset, RawRecord, SeqId, Sequence};
 pub use parse::{parse_fasta, summarize, ParseError, ParseOutcome, Summary};

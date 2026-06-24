@@ -99,6 +99,44 @@ advisory message (grow-to-fit needs the C2 width-change path); bytes verbatim (a
 warn = C4). Default mode is still overwrite here; the user's *insert* default arrives
 with C2's toggle — so the human GUI smoke waits until after C2.
 
+## Batch C2 (paste insert, shift-only) — files
+
+The first WIDTH-CHANGING edit; reworks the edit transport.
+
+**Engine (`crates/align-core`)**
+- `edit.rs` — new `RowSplice { row, col, remove, bytes }` + `EditCmd::SpliceRows`
+  (general splice primitive; symmetric inverse via per-splice old-byte capture, so it
+  serves insert AND the future cut-shorten). `apply_splice_rows`: atomic bounds check,
+  **`EditError::WidthMismatch`** real `Result` error for a ragged result (one-splice-per-
+  row is a `debug_assert`), sets `aln.width` post-splice. 5 new tests. `lib.rs` re-exports
+  `RowSplice`.
+
+**Command (`src-tauri`)**
+- `commands.rs` — `paste_insert(r0,c0,rows,shift_all)` cmd + `paste_insert_splices` helper
+  (target rows: gap-padded line at c0; others: W gaps trailing (shift-only) / at c0
+  (shift-all)). 3 tests (drop-past-end, shift-only buffer+undo, shift-all aligned).
+  `lib.rs` registers it. No new capability.
+
+**Frontend**
+- `model/view.ts` — `buffer`/`meta` now mutable; **`resizeContents(bytes)`** replaces
+  `replaceContents` (derives newWidth = len/numRows, reassigns on the same view object).
+  `view.test.ts` rewritten (same-width / width-grow / not-a-whole-row throw).
+- `state/selection.ts` — `clampSelection(sel, dims)` (used by updateDims on a shrink).
+- `state/store.ts` — `updateDims(cols, rows)`: re-clamp viewport, KEEP scroll + selection
+  (vs `setDims` which resets on load), clamp+notify the selection on a shrink.
+- `ipc/edit.ts` — `pasteInsert(r0,c0,rows,shiftAll)`.
+- `ui/Grid.tsx` — `runEdit` unified on `resizeContents` + `updateDims` (handles width-
+  changing undo/redo for free) + `onResized` notify; `doPaste` → insert (shift-only),
+  selects the inserted block, reports dropped overflow rows; `onResizedRef` + `onResized`
+  prop. `ui/App.tsx` — passes `onResized` → `setSummary({...,width})` so the header
+  follows (same `view` ref ⇒ no `[view]` re-fire). Toolbar Paste title → "inserting".
+
+**Why SpliceRows-general (decision):** a dedicated `DeleteBlock` would need different
+restore behavior as the inverse-of-insert vs as a primary cut; per-splice old-byte
+capture collapses both into one symmetric primitive. **Why real `WidthMismatch` error:**
+it guards genuine data corruption (a wrong `width` over differing-length rows), so it must
+survive release builds — unlike the one-per-row guard, which is a pure caller-contract.
+
 ## Seams for Batches C–D (paste/cut, building on the B foundation)
 
 - `crates/align-core/src/edit.rs` — `EditCmd` enum (variants: InsertGap, DeleteGap,

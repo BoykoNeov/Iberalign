@@ -35,6 +35,7 @@ import {
   extendActive as selExtendActive,
   selectAll as selSelectAll,
   collapseSelection as selCollapse,
+  clampSelection as selClamp,
 } from "./selection";
 
 export class GridStore {
@@ -99,6 +100,21 @@ export class GridStore {
     this.selection = null;
     this.onSelectionChange?.(null);
     this.mutate(clamp({ ...this.viewport, scrollX: 0, scrollY: 0 }, this.dims));
+  }
+
+  /** Update the dimensions after a width-changing EDIT (paste-insert / cut /
+   *  their undo/redo) — NOT a load. Unlike `setDims` this KEEPS the scroll and the
+   *  selection (the edit didn't change what's loaded); it only re-clamps both to
+   *  the new extent. A shrink can push the cursor past the new edge, so the
+   *  selection is clamped and the listener fired (else the toolbar readout goes
+   *  stale after an undo-shrink). Marks dirty. */
+  updateDims(cols: number, rows: number): void {
+    this.dims = { cols, rows };
+    if (this.selection) {
+      this.selection = selClamp(this.selection, this.dims);
+      this.onSelectionChange?.(this.selection);
+    }
+    this.mutate(clamp(this.viewport, this.dims));
   }
 
   /** Set the visible grid-canvas size in CSS px (from the ResizeObserver). */

@@ -42,7 +42,7 @@ import { normalize, rectDims } from "../state/selection";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
 import { parseClipboard } from "../model/paste";
 import { copyText, readClipboardText } from "../ipc/clipboard";
-import { clearCells, pasteOverwrite, undoEdit, redoEdit } from "../ipc/edit";
+import { clearCells, pasteInsert, undoEdit, redoEdit } from "../ipc/edit";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -81,9 +81,12 @@ const RELATIVE_NAV = new Set([
 interface GridProps {
   /** The loaded alignment. Non-null: `App` mounts `Grid` only once a view exists. */
   view: AlignmentView;
+  /** Called after a width-CHANGING edit (paste-insert / undo / redo) with the new
+   *  width, so the App header's width readout stays correct. */
+  onResized?: (width: number) => void;
 }
 
-export default function Grid({ view }: GridProps) {
+export default function Grid({ view, onResized }: GridProps) {
   const cellRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rulerRef = useRef<HTMLCanvasElement>(null);
@@ -140,6 +143,11 @@ export default function Grid({ view }: GridProps) {
   // concurrent undo() invokes whose completion order Tauri doesn't guarantee.
   // While an edit's IPC round-trip is in flight, further edit keys are ignored.
   const editingRef = useRef(false);
+
+  // Latest `onResized` for the once-bound `runEdit` (in the mount effect) to call
+  // without re-binding — width-changing edits notify App to refresh the header.
+  const onResizedRef = useRef(onResized);
+  onResizedRef.current = onResized;
 
   // Flash an ephemeral message in the toolbar, auto-clearing after a moment.
   const showMsg = useCallback((msg: string) => {
@@ -428,12 +436,23 @@ export default function Grid({ view }: GridProps) {
       try {
         const bytes = await op();
         if (bytes.length > 0) {
-          v.replaceContents(bytes);
+          // One path for every edit: swap in the post-edit buffer, deriving the
+          // (possibly new) width from its length. `resizeContents` reuses the same
+          // view object (scroll/selection survive, `[view]` effect stays quiet);
+          // `updateDims` re-clamps the viewport + selection to the new extent. This
+          // handles width-PRESERVING edits (delete/overwrite) and width-CHANGING
+          // ones (paste-insert, and crucially their undo/redo, which flip width) the
+          // same way, so they can never desync.
+          const prevWidth = v.width;
+          v.resizeContents(bytes);
+          store.updateDims(v.width, v.numRows);
           // The cell tiers re-read the buffer each draw, but the density tier's
           // occupancy is memoized by view identity — drop it so a zoom-out after an
           // edit doesn't show stale bars (the view object is reused in place).
           renderer.invalidateContentCaches();
           store.markDirty();
+          // Tell App when the width actually changed so the header readout follows.
+          if (v.width !== prevWidth) onResizedRef.current?.(v.width);
           return true;
         }
         return false;
@@ -445,13 +464,15 @@ export default function Grid({ view }: GridProps) {
       }
     };
 
-    // Paste the system clipboard over the selection in OVERWRITE mode (C1). The
-    // clipboard read + parse happen OUTSIDE `runEdit` (whose try/catch covers only
-    // the edit IPC), so they guard a denied / non-text / empty clipboard
-    // themselves. The block anchors at the selection's top-left and is clamped to
-    // the alignment in Rust (the overrun is dropped/truncated); a clipped paste is
-    // flagged. On success the selection expands to the pasted block so the change —
-    // and its undo — visibly lands.
+    // Paste the system clipboard into the selection in INSERT mode — the default
+    // (shift only the pasted rows; the alignment GROWS in width). The clipboard
+    // read + parse happen OUTSIDE `runEdit` (whose try/catch covers only the edit
+    // IPC), so they guard a denied / non-text / empty clipboard themselves. The
+    // block anchors at the selection's top-left; lines past the last row are
+    // dropped (an insert can't add rows). On success the selection expands to the
+    // inserted block so the change — and its undo — visibly lands. (Overwrite mode
+    // and the shift-all toggle join via the toolbar in later batches; the engine
+    // already supports both.)
     const doPaste = async () => {
       const v = viewRef.current;
       if (!v) return;
@@ -473,18 +494,19 @@ export default function Grid({ view }: GridProps) {
         return;
       }
       const { r0, c0 } = normalize(sel);
-      const blockRows = rows.length;
-      const blockCols = rows.reduce((m, line) => Math.max(m, line.length), 0);
-      const clipped = r0 + blockRows > v.numRows || c0 + blockCols > v.width;
-      const ok = await runEdit(() => pasteOverwrite(r0, c0, rows));
-      if (!ok) return;
-      // Select the (clamped) pasted block.
+      // Lines map to rows r0.. ; those past the last row can't be inserted.
+      const keptRows = Math.min(rows.length, v.numRows - r0);
+      const dropped = rows.length - keptRows;
+      const w = rows.slice(0, keptRows).reduce((m, line) => Math.max(m, line.length), 0);
+      const ok = await runEdit(() => pasteInsert(r0, c0, rows, false));
+      if (!ok) return; // empty block (all kept lines blank) ⇒ no-op
+      // Select the inserted block (now occupying cols c0..c0+w-1 in the target rows).
       store.setCursor(r0, c0);
-      store.setActive(Math.min(r0 + blockRows - 1, v.numRows - 1), Math.min(c0 + blockCols - 1, v.width - 1));
+      store.setActive(r0 + keptRows - 1, c0 + w - 1);
       showMsg(
-        clipped
-          ? "Pasted (clipped to fit the alignment)"
-          : `Pasted ${blockCols} × ${blockRows} (overwrite)`,
+        dropped > 0
+          ? `Inserted ${w} × ${keptRows} (${dropped} row${dropped > 1 ? "s" : ""} past the end dropped)`
+          : `Inserted ${w} × ${keptRows} (insert)`,
       );
     };
     doPasteRef.current = doPaste;
@@ -522,9 +544,10 @@ export default function Grid({ view }: GridProps) {
         void doCopyRef.current();
         return;
       }
-      // Paste (Ctrl/⌘+V) — overwrite the selection from the clipboard (C1; the
-      // width-changing insert modes land in later batches). `doPaste` reads + parses
-      // the clipboard, so a no-selection / empty-clipboard paste is a guarded no-op.
+      // Paste (Ctrl/⌘+V) — insert the clipboard at the selection (the default
+      // shift-only mode; overwrite + shift-all join via the toolbar later).
+      // `doPaste` reads + parses the clipboard, so a no-selection / empty-clipboard
+      // paste is a guarded no-op.
       if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
         void doPaste();

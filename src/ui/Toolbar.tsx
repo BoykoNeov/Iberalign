@@ -61,7 +61,7 @@ export default function Toolbar({
         className="toolbar-btn"
         onClick={onPaste}
         disabled={!hasSel}
-        title="Paste the clipboard over the selection, overwriting in place (Ctrl/⌘+V)"
+        title="Paste the clipboard at the selection, inserting (Ctrl/⌘+V)"
       >
         Paste
       </button>

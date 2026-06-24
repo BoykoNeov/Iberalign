@@ -102,6 +102,13 @@ export function collapseSelection(sel: Selection): Selection {
   return { anchor: sel.active, active: sel.active };
 }
 
+/** Clamp both ends of a selection into `dims` — used after a width-SHRINKING edit
+ *  (e.g. undoing a paste-insert) can leave a cell past the new edge. Grows can't
+ *  push a cell out of bounds, so this is a no-op there. */
+export function clampSelection(sel: Selection, dims: Dims): Selection {
+  return { anchor: clampCell(sel.anchor, dims), active: clampCell(sel.active, dims) };
+}
+
 /** The selection as an inclusive, axis-aligned rectangle (anchor/active in any
  *  order). The shape downstream copy/edit (and the `SelectionLayer` fill) read. */
 export function normalize(sel: Selection): CellRect {

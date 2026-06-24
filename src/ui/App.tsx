@@ -107,7 +107,10 @@ export default function App() {
           </span>
         </header>
         <div className="app-grid-area">
-          <Grid view={view} />
+          <Grid
+            view={view}
+            onResized={(width) => setSummary((s) => (s ? { ...s, width } : s))}
+          />
         </div>
       </div>
     );

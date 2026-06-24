@@ -31,6 +31,23 @@ export function pasteOverwrite(r0: number, c0: number, rows: string[]): Promise<
   return editBuffer("paste_overwrite", { r0, c0, rows });
 }
 
+/**
+ * Paste a block of residue lines over the alignment in INSERT mode — the block is
+ * inserted at `(r0, c0)` and the alignment GROWS in width. `shiftAll` chooses how
+ * the other rows keep equal width: `false` (the default) trailing-pads them (only
+ * the pasted rows shift), `true` inserts gaps at `c0` everywhere (columns stay
+ * aligned). The returned buffer is WIDER, so the caller resizes the view (it
+ * derives the new width from the buffer length) rather than copying in place.
+ */
+export function pasteInsert(
+  r0: number,
+  c0: number,
+  rows: string[],
+  shiftAll: boolean,
+): Promise<Uint8Array> {
+  return editBuffer("paste_insert", { r0, c0, rows, shiftAll });
+}
+
 /** Undo the most recent edit. Empty result ⇒ nothing to undo. */
 export function undoEdit(): Promise<Uint8Array> {
   return editBuffer("undo_edit");
