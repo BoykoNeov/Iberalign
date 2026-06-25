@@ -253,8 +253,8 @@ export class Canvas2DRenderer implements Renderer {
   }
 
   /** Per-row trailing-gap start column, computed once per loaded view (cheap unless
-   *  rows are mostly gaps; scans from the right). Drives drawing trailing padding as
-   *  blank background; dropped by `invalidateContentCaches` after an in-place edit. */
+   *  rows are mostly gaps; scans from the right). Drives drawing trailing padding as a
+   *  recessive grey fill; dropped by `invalidateContentCaches` after an in-place edit. */
   private ensureTrailingStart(view: AlignmentView): Int32Array {
     if (this.trailView === view && this.trailStart) return this.trailStart;
     this.trailStart = trailingGapStarts(view.buffer, view.width, view.numRows);

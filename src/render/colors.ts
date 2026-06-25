@@ -42,9 +42,11 @@ export interface ColorScheme {
    *  alpha, so a fully-gapped column fades to the background. */
   readonly densityStyle: string;
   /** Cell fill for TRAILING gap padding (the run of gaps past a row's last residue).
-   *  A faint grey — lighter than the interior-gap fill and recessive against the
-   *  background — so padding reads as "ragged right / no data here" rather than as a
-   *  real (interior) gap. Trailing cells also draw no `-` glyph (renderer). */
+   *  A clear grey — distinctly darker than the background so padding reads as "ragged
+   *  right / no data here" rather than as empty space beyond the alignment. It sits at
+   *  ~interior-gap lightness; the two are told apart by the GLYPH (interior gaps draw a
+   *  `-`, trailing cells draw none) rather than by color, which leaves room for the
+   *  background separation the eye actually needs. */
   readonly trailingStyle: string;
   /** Cell fill (CSS color) for a residue byte. Case-insensitive; gaps and
    *  unknown residues map to the scheme's gap / fallback color. */
@@ -61,7 +63,7 @@ export interface SchemeSpec {
   residues: Record<string, Rgb>;
   /** Fill for `-` / `.` gap bytes. */
   gap: Rgb;
-  /** Fill for trailing gap padding (default: a faint grey between gap and background). */
+  /** Fill for trailing gap padding (default: a clear grey, well below the background). */
   trailing?: Rgb;
   /** Fill for residues not in `residues` (ambiguity codes, `*`, unknown). */
   fallback: Rgb;
@@ -104,7 +106,7 @@ export function makeScheme(spec: SchemeSpec): ColorScheme {
     label: spec.label,
     background: rgbCss(spec.background ?? [250, 250, 250]),
     densityStyle: rgbCss(spec.densityStyle ?? [68, 97, 122]),
-    trailingStyle: rgbCss(spec.trailing ?? [241, 241, 241]),
+    trailingStyle: rgbCss(spec.trailing ?? [230, 230, 230]),
     fillStyleFor: (byte) => fill[byte & 0xff],
     inkStyleFor: (byte) => ink[byte & 0xff],
   };
@@ -112,7 +114,7 @@ export function makeScheme(spec: SchemeSpec): ColorScheme {
 
 // Shared neutrals so every scheme treats gaps / unknowns / chrome consistently.
 const GAP_RGB: Rgb = [232, 232, 232]; // light grey — interior gap, present but recessive
-const TRAILING_RGB: Rgb = [241, 241, 241]; // fainter grey — trailing padding, between gap and bg
+const TRAILING_RGB: Rgb = [230, 230, 230]; // clear grey — trailing padding; ~gap lightness, well below bg (told from interior gaps by the absent `-` glyph)
 const FALLBACK_RGB: Rgb = [158, 158, 158]; // medium grey — "uncertain", ≠ gap
 const BG_RGB: Rgb = [250, 250, 250];
 const DENSITY_RGB: Rgb = [68, 97, 122];

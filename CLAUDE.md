@@ -312,11 +312,17 @@ dependency-light and surface toolchain/linker issues fast.
   splicing a column into the active row trailing-pads every OTHER row to keep the matrix
   rectangular (the trailing-pad-only invariant — buffer MUST stay rectangular, so this is
   a RENDER fix, not an engine change). The grid draws each row's trailing gap run (gaps
-  past its last residue) as a faint-grey recessive fill (`ColorScheme.trailingStyle` =
-  `[241,241,241]`, between the interior-gap `[232,232,232]` and the `[250,250,250]`
-  background) with NO `-` glyph — so rows read "ragged right" instead of looking grown;
-  INTERIOR gaps still show as full gaps. (Shipped as bare BACKGROUND first; user
-  smoke-passed it then chose the faint grey, now applied.) Generalized to ALL trailing
+  past its last residue) as a recessive grey fill (`ColorScheme.trailingStyle` =
+  `[230,230,230]`) with NO `-` glyph — so rows read "ragged right" instead of looking
+  grown; INTERIOR gaps still show as full gaps. (Shipped as bare BACKGROUND first; user
+  smoke-passed it, then chose faint grey `[241]`, then — too close to the `[250]`
+  background to see (Δ9) — settled on `[230]`, GUI smoke PASSED 2026-06-25.) **Color
+  resolution (advisor):** the interior-gap↔background band (`232`–`250`) is too narrow to
+  fit a third clearly-separated grey, so trailing sits at ~gap lightness and is told from
+  interior gaps by the ABSENT glyph, NOT by color — spending the contrast where the eye
+  needs it (Δ20 vs background). `colors.test.ts` now asserts a PERCEPTIBILITY floor
+  (`background − trailing ≥ 12`), not bare `!==` (the old `!==` passed at the invisible
+  Δ9 — that's how `[241]` shipped). Generalized to ALL trailing
   padding (file-loaded ragged lengths, cut-shorten pad), advisor-confirmed as
   more-correct not scope-creep. New pure `model/trailing.ts::trailingGapStarts`
   (ends-in-residue → `width`, all-gap row → `0`; `trailing.test.ts` pins the boundaries);
@@ -325,8 +331,8 @@ dependency-light and surface toolchain/linker issues fast.
   occupancy and **drops them in `invalidateContentCaches`** (the in-place edit path
   reuses the view object — without the reset, insert shows the old padding boundary until
   reload); `drawCells` clamps fills + glyphs to `[cols.first, trailStart)` then paints one
-  faint-grey rect for the tail. Letter/block tiers only (density already fades gaps);
-  trailing only. An all-gap row renders as a faint-grey row. typecheck + 224 vitest +
+  grey rect for the tail. Letter/block tiers only (density already fades gaps);
+  trailing only. An all-gap row renders as a recessive-grey row. typecheck + 225 vitest +
   build green.
 - **Consensus + coloring + shell — Phase 1 (quick wins) GUI smoke PASSED (2026-06-25,
   user "all work"). Phases 2–5 not started.** Phase 1 (frontend-only;

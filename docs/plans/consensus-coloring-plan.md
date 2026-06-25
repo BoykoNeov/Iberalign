@@ -14,10 +14,15 @@ starts. This file is the agreed design + decisions + phasing.
     column into the active row trailing-pads every OTHER row to keep the matrix
     rectangular (the core trailing-pad-only invariant; the buffer MUST stay
     rectangular, so this is a RENDER fix, never an engine change). The grid draws each
-    row's trailing gap run (gaps past its last residue) as a faint-grey recessive fill
-    (`trailingStyle` = `[241,241,241]`, between the interior-gap `[232,232,232]` and
-    the `[250,250,250]` background) with NO `-` glyph — so sequences read "ragged
+    row's trailing gap run (gaps past its last residue) as a recessive grey fill
+    (`trailingStyle` = `[230,230,230]`) with NO `-` glyph — so sequences read "ragged
     right" and don't look like they grew. INTERIOR gaps still show as full gaps.
+    **Color tuning (advisor):** the interior-gap↔background band (`232`–`250`) is too
+    narrow for a third clearly-separated grey, so trailing sits at ~gap lightness and is
+    distinguished from interior gaps by the ABSENT glyph, not by color — spending the Δ
+    where the eye needs it (Δ20 vs background; the first try `[241]` was an invisible Δ9
+    and read as empty space). `colors.test.ts` now asserts `background − trailing ≥ 12`
+    (a perceptibility floor) rather than bare `!==` (which passed at the invisible Δ9).
     Generalized to ALL trailing padding (file-loaded ragged lengths, cut-shorten pad),
     not just the last insert — more correct, not scope creep (advisor-confirmed).
     First shipped as bare BACKGROUND (blank); user smoke-passed it then asked for the

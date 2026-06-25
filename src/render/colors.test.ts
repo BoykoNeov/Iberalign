@@ -80,18 +80,32 @@ describe("glyph ink — always black", () => {
   });
 });
 
+// `rgb(n, n, n)` → n. Our neutrals are pure greys, so the first channel is the value.
+const greyOf = (css: string): number => {
+  const m = css.match(/\d+/);
+  return m ? Number(m[0]) : NaN;
+};
+
 describe("trailing-padding fill", () => {
-  it("is a faint grey distinct from BOTH the interior-gap fill and the background", () => {
+  it("is distinct from the interior-gap fill (told apart by the absent glyph at the same lightness)", () => {
     for (const scheme of [VIVID_SCHEME, CLASSIC_SCHEME, COLORBLIND_SCHEME]) {
       const gap = scheme.fillStyleFor(ord("-"));
-      expect(scheme.trailingStyle).not.toBe(gap); // padding ≠ real gap
-      expect(scheme.trailingStyle).not.toBe(scheme.background); // still reads as a cell
+      expect(scheme.trailingStyle).not.toBe(gap); // a different value, even if near the gap's lightness
+    }
+  });
+
+  it("is PERCEPTIBLY darker than the background, not merely ≠ it", () => {
+    // The earlier `!== background` passed at an invisible Δ9 (241 vs 250) — inequality
+    // is not perceptibility. Require a real luminance gap so padding can't silently
+    // shrink back into "looks like empty space beyond the alignment".
+    for (const scheme of [VIVID_SCHEME, CLASSIC_SCHEME, COLORBLIND_SCHEME]) {
+      expect(greyOf(scheme.background) - greyOf(scheme.trailingStyle)).toBeGreaterThanOrEqual(12);
     }
   });
 
   it("defaults when a custom spec omits `trailing`", () => {
     const s = makeScheme({ id: "t", label: "T", residues: {}, gap: [1, 1, 1], fallback: [2, 2, 2] });
-    expect(s.trailingStyle).toBe("rgb(241, 241, 241)");
+    expect(s.trailingStyle).toBe("rgb(230, 230, 230)");
   });
 
   it("honors an explicit `trailing` override", () => {
