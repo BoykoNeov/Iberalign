@@ -307,8 +307,21 @@ dependency-light and surface toolchain/linker issues fast.
   (ties → smallest byte). Memoized by view identity; `invalidate()` wired into the edit
   paths. `consensus.test.ts`. Gutter label is still `cons` (rename → "Consensus" is a
   Quick-Win in the roadmap below).
-- **Consensus + coloring + shell — large multi-batch; PLANNED, not started.** A big set
-  of user requests (2026-06-24), captured in `docs/plans/consensus-coloring-plan.md`:
+- **Consensus + coloring + shell — Phase 1 (quick wins) code complete + green; GUI
+  smoke PENDING. Phases 2–5 not started.** Phase 1 (frontend-only, 2026-06-25;
+  typecheck + 214 vitest + build green): **spacebar → gap** (new pure
+  `model/typing.ts::residueForKey` maps space → `-`, residue-glyph → itself, else
+  `null`-to-fall-through; `isResidueKey` stays strict; `Grid.tsx` keydown routes
+  through it so space writes a gap at the cursor — Replace overwrites, Insert splices
+  a gap column into the active row); **`cons` → `Consensus`** gutter label (renders
+  `CONSENSUS`, uppercase kept, fits the 124px box); **minimap sharpness**
+  (`MinimapLayer` sizes the aggregate to `min(content, strip-device-px, cap)` per axis
+  ⇒ blit is upscale-or-1:1 ⇒ `imageSmoothingEnabled=false` unconditionally safe; cache
+  keyed on the CLAMPED resolution so it rebuilds on a strip-resolution change but stops
+  past the cap; the now-per-resize O(w×r) rebuild is a noted cost at the 10k×10k
+  ceiling, debounce only if it janks); **insert-mode-only-grows-active-row** already
+  correct in code (`pasteInsert(…, shiftAll=false)`), smoke-only. The rest of the batch —
+  configurable consensus pipeline + conservation coloring + menu bar — is a big set
   a configurable consensus (gap-handling pipeline ignore/gap-priority/star → agreement
   rule strict-IUPAC/all-identical/same-type{R-Y|majority-base|IUPAC-class}/majority(>50%)
   → no-consensus fallback gap/`*`), a consensus options **dialog**, track + main-grid

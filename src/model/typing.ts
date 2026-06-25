@@ -19,7 +19,24 @@
 // length check below short-circuits the common multi-char keys before the regex.
 const RESIDUE_RE = /^[A-Za-z.\-*?]$/;
 
-/** True if `key` (a `KeyboardEvent.key`) is a residue the grid should type. */
+/** True if `key` (a `KeyboardEvent.key`) is itself a residue glyph the grid types
+ *  verbatim. Strict — SPACE is NOT a residue glyph (it maps to a gap via
+ *  `residueForKey`); see that function for the key the grid actually acts on. */
 export function isResidueKey(key: string): boolean {
   return key.length === 1 && RESIDUE_RE.test(key);
+}
+
+// SPACEBAR is a convenience shortcut for inserting a gap (the text-editor habit of
+// pressing space, but in an alignment "blank" means a gap, `-`). So the grid maps
+// it to the gap byte rather than typing a literal space.
+const SPACE_KEY = " ";
+const GAP_GLYPH = "-";
+
+/** The residue CHARACTER the grid should write for a `KeyboardEvent.key`, or `null`
+ *  if the key isn't a typed residue (so the caller falls through to navigation).
+ *  Space → gap (`-`); a residue glyph → itself (case preserved). This is the level
+ *  the grid acts on; `isResidueKey` is the strict glyph test it's built from. */
+export function residueForKey(key: string): string | null {
+  if (key === SPACE_KEY) return GAP_GLYPH;
+  return isResidueKey(key) ? key : null;
 }

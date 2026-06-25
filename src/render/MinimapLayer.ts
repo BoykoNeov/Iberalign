@@ -5,12 +5,20 @@
 // density LOD tier uses (occupancy over averaged-color: gap structure is the
 // honest, scheme-independent overview; conservation/identity coloring is M4 data).
 //
-// The aggregate is built ONCE per loaded view into a small offscreen canvas, then
-// `drawImage`-scaled to fill the strip each frame — so per-frame cost is one
-// blit + one rectangle, independent of alignment size. Only the viewport
-// rectangle (the "you are here" box) actually changes per frame; it follows
-// scroll/zoom because the layer is a `Drawable` on the shared rAF loop and every
-// store mutation marks dirty.
+// The aggregate is built into a small offscreen canvas (per load, and again when
+// the strip's device resolution changes — see below), then `drawImage`-scaled to
+// fill the strip each frame — so per-frame cost is one blit + one rectangle,
+// independent of alignment size. Only the viewport rectangle (the "you are here"
+// box) actually changes per frame; it follows scroll/zoom because the layer is a
+// `Drawable` on the shared rAF loop and every store mutation marks dirty.
+//
+// SHARPNESS: the aggregate is sized to `min(content, strip-device-px, cap)` per
+// axis, so the strip is never larger than the aggregate on an axis the content
+// fills. That makes every blit a nearest-neighbour UPSCALE or 1:1 (never a
+// downscale — downsampling is done by the box accumulation below, which can't
+// alias away a thin conserved column), so smoothing is OFF: crisp bands even with
+// a handful of sequences. The cost is a rebuild when the strip resolution changes
+// (keyed on the CLAMPED resolution, so it stops rebuilding past the cap).
 //
 // Interaction (click/drag to navigate) lives in `Grid.tsx`, which maps a pointer
 // point back to a scroll offset through `minimap.ts::minimapToScroll` — the pure
@@ -49,10 +57,13 @@ export class MinimapLayer implements Drawable {
   private scheme: ColorScheme;
   private dpr = 1;
 
-  // The offscreen aggregate, memoized by view IDENTITY (rebuilt on load / after an
+  // The offscreen aggregate, memoized by view IDENTITY *and* the clamped resolution
+  // it was built at (rebuilt on load, on a strip-resolution change, and after an
   // in-place edit via `invalidate`). Null until the first draw with a view.
   private aggCanvas: HTMLCanvasElement | null = null;
   private aggView: AlignmentView | null = null;
+  private builtCols = 0;
+  private builtRows = 0;
 
   constructor(canvas: HTMLCanvasElement, scheme: ColorScheme = defaultScheme()) {
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -66,8 +77,11 @@ export class MinimapLayer implements Drawable {
     this.dpr = dpr;
     this.canvas.width = Math.max(0, Math.round(cssW * dpr));
     this.canvas.height = Math.max(0, Math.round(cssH * dpr));
-    // Resize only rescales the blit + rect — the aggregate is resolution-fixed and
-    // survives, so a window resize never rebuilds it.
+    // The aggregate is sized to the strip's device resolution (for sharpness), so a
+    // resize that changes the clamped resolution rebuilds it on the next draw via the
+    // `ensureAggregate` cache key. (Past the cap the clamped resolution is constant,
+    // so a large strip stops rebuilding.) `ensureAggregate` reads the canvas dims
+    // directly; nothing to recompute here.
   }
 
   setColorScheme(scheme: ColorScheme): void {
@@ -97,7 +111,9 @@ export class MinimapLayer implements Drawable {
     // Aggregate overview (skipped for an empty alignment — nothing to summarize).
     const agg = this.ensureAggregate(view);
     if (agg) {
-      ctx.imageSmoothingEnabled = true;
+      // OFF: the aggregate is sized so this blit is only ever an upscale or 1:1 (see
+      // the header) — nearest-neighbour keeps few-row bands and thin columns crisp.
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(agg, 0, 0, agg.width, agg.height, 0, 0, cw, ch);
     }
 
@@ -130,17 +146,37 @@ export class MinimapLayer implements Drawable {
   /** Build (once per view) the offscreen occupancy aggregate, or return the cached
    *  one. `null` for an empty alignment. */
   private ensureAggregate(view: AlignmentView): HTMLCanvasElement | null {
-    if (this.aggView === view && this.aggCanvas) return this.aggCanvas;
     const width = view.width;
     const rows = view.numRows;
     if (width === 0 || rows === 0) {
       this.aggCanvas = null;
       this.aggView = view;
+      this.builtCols = 0;
+      this.builtRows = 0;
       return null;
     }
 
-    const aggCols = Math.min(width, MAX_AGG_COLS);
-    const aggRows = Math.min(rows, MAX_AGG_ROWS);
+    // Size to the SMALLER of the content, the strip's device-pixel extent, and the
+    // safety ceiling — so the strip never exceeds the aggregate on a filled axis and
+    // the blit stays upscale-or-1:1 (smoothing OFF, see header). `draw` guards
+    // cw/ch > 0 before calling, so the canvas dims are positive; fall back to the cap
+    // defensively if ever 0.
+    const targetW = this.canvas.width || MAX_AGG_COLS;
+    const targetH = this.canvas.height || MAX_AGG_ROWS;
+    const aggCols = Math.min(width, targetW, MAX_AGG_COLS);
+    const aggRows = Math.min(rows, targetH, MAX_AGG_ROWS);
+
+    // Memoize on the CLAMPED resolution (not the raw canvas size): once the strip
+    // grows past the cap the clamped resolution is constant, so rebuilds stop.
+    if (
+      this.aggView === view &&
+      this.aggCanvas &&
+      this.builtCols === aggCols &&
+      this.builtRows === aggRows
+    ) {
+      return this.aggCanvas;
+    }
+
     const buf = view.buffer;
 
     // Per-bucket non-gap count + cell total → occupancy. Precompute each column's
@@ -171,6 +207,8 @@ export class MinimapLayer implements Drawable {
     if (!offCtx) {
       this.aggCanvas = null;
       this.aggView = view;
+      this.builtCols = 0;
+      this.builtRows = 0;
       return null;
     }
     const img = offCtx.createImageData(aggCols, aggRows);
@@ -188,6 +226,8 @@ export class MinimapLayer implements Drawable {
 
     this.aggCanvas = off;
     this.aggView = view;
+    this.builtCols = aggCols;
+    this.builtRows = aggRows;
     return off;
   }
 }

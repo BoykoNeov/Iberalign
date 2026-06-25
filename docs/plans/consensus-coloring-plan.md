@@ -2,8 +2,42 @@
 
 Umbrella plan for the large multi-feature batch requested 2026-06-24. Spans
 several work-batches; each gets its own `{plan,context,tasks}` triad when it
-starts. This file is the agreed design + decisions + phasing. **Nothing here is
-built yet** — this is the accepted plan, captured durably.
+starts. This file is the agreed design + decisions + phasing.
+
+## Status
+
+- **Phase 1 (quick wins) — code complete + green; GUI smoke PENDING.** Landed
+  2026-06-25 (frontend-only; typecheck + 214 vitest + build all green):
+  - **spacebar → gap.** New pure `model/typing.ts::residueForKey(key) → string |
+    null` (space → `-`; a residue glyph → itself; else `null` so the grid falls
+    through to nav). `isResidueKey` stays strict (its test that space is *not* a
+    glyph is unchanged). `Grid.tsx` keydown now routes through `residueForKey`, so
+    pressing space writes a gap at the cursor in the current type-mode (Replace
+    overwrites; Insert splices a gap column into the active row). `typing.test.ts`
+    grew a `residueForKey` block.
+  - **`cons` → `Consensus`.** Track-lane gutter label text in `Grid.tsx`; renders
+    `CONSENSUS` (the `.grid-track-corner` `text-transform: uppercase` is kept for
+    chrome consistency) and fits the 124px content box, no resize needed.
+  - **minimap sharpness.** `MinimapLayer` now sizes the offscreen aggregate to
+    `min(content, strip-device-px, cap)` per axis, so the blit is only ever an
+    upscale or 1:1 → `imageSmoothingEnabled = false` is unconditionally safe (crisp
+    few-row bands; box accumulation still anti-aliases the downscale, so no thin-
+    column loss). Cache keyed on the CLAMPED resolution, so it rebuilds on a
+    strip-resolution change but stops rebuilding past the cap. Pure-geometry
+    `minimap.test.ts` is unaffected (it tests only `viewportRectInMinimap` /
+    `minimapToScroll`).
+  - **insert-mode-only-grows-the-active-row** — already the behavior
+    (`doType` → `pasteInsert(row, col, [ch], /*shiftAll*/ false)` at `Grid.tsx`);
+    verified in code, smoke-only.
+
+  **GUI-smoke checklist (next `tauri dev`):** space inserts a gap in both Replace
+  and Insert modes; `CONSENSUS` label reads cleanly in the gutter; minimap is sharp
+  with few sequences AND with a wide alignment, AND a window-resize doesn't visibly
+  jank at a large alignment (the new per-resolution-change rebuild is O(width×rows);
+  10k×10k is the ceiling, not the target — debounce only if it janks). Folds in the
+  still-pending keyboard-entry + strict-IUPAC consensus-track smokes.
+
+**Phases 2–5 below: not started.**
 
 ## Requests (verbatim intent)
 

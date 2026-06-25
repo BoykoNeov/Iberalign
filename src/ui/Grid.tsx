@@ -65,7 +65,7 @@ import {
   redoEdit,
 } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
-import { isResidueKey } from "../model/typing";
+import { residueForKey } from "../model/typing";
 import type { PasteMode, CutMode, DeleteMode, TypeMode } from "./Toolbar";
 import "./Grid.css";
 
@@ -1225,14 +1225,18 @@ export default function Grid({ view, onResized }: GridProps) {
       }
       // Manual residue entry: a bare printable residue key (no Ctrl/Meta/Alt — Shift
       // is allowed for capitals) writes that residue at the cursor in the current
-      // mode. Placed AFTER the Ctrl/⌘ shortcuts + Delete (so Ctrl+A still selects-all,
-      // Ctrl+C copies) and the `!ctrl && !meta && !alt` guard keeps AltGr letter
-      // combos out; placed BEFORE the nav block so arrows/Page (multi-char keys, not
-      // residues) fall through to it.
-      if (!e.ctrlKey && !e.metaKey && !e.altKey && isResidueKey(e.key)) {
-        e.preventDefault();
-        void doType(e.key);
-        return;
+      // mode. SPACE maps to a gap (`-`) via `residueForKey` — the quick gap-insert
+      // shortcut. Placed AFTER the Ctrl/⌘ shortcuts + Delete (so Ctrl+A still
+      // selects-all, Ctrl+C copies) and the `!ctrl && !meta && !alt` guard keeps
+      // AltGr letter combos out; a non-residue key returns `null` and FALLS THROUGH
+      // to the nav block below (so arrows/Page still navigate).
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        const ch = residueForKey(e.key);
+        if (ch !== null) {
+          e.preventDefault();
+          void doType(ch);
+          return;
+        }
       }
       const corner = e.ctrlKey || e.metaKey;
       const shift = e.shiftKey;
@@ -1528,7 +1532,7 @@ export default function Grid({ view, onResized }: GridProps) {
             canvas. TrackLaneRenderer paints the IUPAC consensus row over all rows,
             scroll-synced and column-aligned to the grid. */}
         <div className="grid-track-corner" aria-hidden="true">
-          cons
+          Consensus
         </div>
         <canvas ref={trackRef} className="grid-track" />
         <canvas ref={nameRef} className="grid-names" />

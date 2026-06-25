@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isResidueKey } from "./typing";
+import { isResidueKey, residueForKey } from "./typing";
 
 describe("isResidueKey", () => {
   it("accepts letters in either case (case is preserved by the caller)", () => {
@@ -40,5 +40,29 @@ describe("isResidueKey", () => {
 
   it("rejects the empty string", () => {
     expect(isResidueKey("")).toBe(false);
+  });
+});
+
+describe("residueForKey", () => {
+  it("maps the spacebar to a gap (`-`) — the quick gap-insert shortcut", () => {
+    expect(residueForKey(" ")).toBe("-");
+  });
+
+  it("returns a residue glyph verbatim (case preserved)", () => {
+    for (const k of ["A", "c", "T", "n", "-", ".", "*", "?"]) {
+      expect(residueForKey(k)).toBe(k);
+    }
+  });
+
+  it("returns null for nav / control keys (caller falls through to navigation)", () => {
+    for (const k of ["ArrowUp", "Enter", "Backspace", "Tab", "Escape", "PageDown", ""]) {
+      expect(residueForKey(k)).toBeNull();
+    }
+  });
+
+  it("returns null for non-residue printables (digits, punctuation)", () => {
+    for (const k of ["0", "9", ",", "/", "(", "+", "="]) {
+      expect(residueForKey(k)).toBeNull();
+    }
   });
 });
