@@ -8,29 +8,32 @@ starts. This file is the agreed design + decisions + phasing.
 
 - **Phase 1 (quick wins) — GUI smoke PASSED (2026-06-25, user "all work").** Plus a
   smoke-driven follow-up landed the same day:
-  - **Trailing-gap padding renders BLANK (not as real gaps).** Smoke observation:
-    insert-mode "appears to grow all sequences" — because splicing a column into the
-    active row trailing-pads every OTHER row to keep the matrix rectangular (the core
-    trailing-pad-only invariant; the buffer MUST stay rectangular, so this is a
-    RENDER fix, never an engine change). Now the grid draws each row's trailing gap
-    run (gaps past its last residue) as bare background — no fill, no `-` glyph — so
-    sequences read "ragged right" and don't look like they grew. INTERIOR gaps still
-    show as gaps. Generalized to ALL trailing padding (file-loaded ragged lengths,
-    cut-shorten pad), not just the last insert — more correct, not scope creep
-    (advisor-confirmed). New pure `model/trailing.ts::trailingGapStarts(buffer,
-    width, numRows)` (per-row first trailing-gap column; ends-in-residue → `width`,
-    all-gap row → `0`); `trailing.test.ts` pins the three boundaries. Renderer caches
-    it by view identity like occupancy and **drops it in `invalidateContentCaches`**
-    (the in-place edit path keeps the same view object — without the reset, insert
-    would show the old padding boundary until reload; the exact bug this targets).
-    `drawCells` clamps each row's fills + glyphs to `[cols.first, trailStart)`.
-    Scoped to the letter/block tiers (the density tier already fades gaps via
-    occupancy); trailing only (leading gaps left as-is, per the request).
-    **GUI smoke PENDING:** confirm the blank look reads well — especially an all-gap
-    row (renders a fully blank row: name in the gutter, no cells) and scrolling INTO
-    an all-padding region (could read as "scrolled off the end"). Fallback if it
-    reads as empty/broken: a faint grey lighter than the `[232,232,232]` interior-gap
-    fill — a one-line change.
+  - **Trailing-gap padding renders FAINT GREY (not as real gaps) — GUI smoke PASSED
+    (2026-06-25, user "all works"; blank tried first, faint grey chosen).** Smoke
+    observation: insert-mode "appears to grow all sequences" — because splicing a
+    column into the active row trailing-pads every OTHER row to keep the matrix
+    rectangular (the core trailing-pad-only invariant; the buffer MUST stay
+    rectangular, so this is a RENDER fix, never an engine change). The grid draws each
+    row's trailing gap run (gaps past its last residue) as a faint-grey recessive fill
+    (`trailingStyle` = `[241,241,241]`, between the interior-gap `[232,232,232]` and
+    the `[250,250,250]` background) with NO `-` glyph — so sequences read "ragged
+    right" and don't look like they grew. INTERIOR gaps still show as full gaps.
+    Generalized to ALL trailing padding (file-loaded ragged lengths, cut-shorten pad),
+    not just the last insert — more correct, not scope creep (advisor-confirmed).
+    First shipped as bare BACKGROUND (blank); user smoke-passed it then asked for the
+    faint grey ("looks better"), now applied. New pure
+    `model/trailing.ts::trailingGapStarts(buffer, width, numRows)` (per-row first
+    trailing-gap column; ends-in-residue → `width`, all-gap row → `0`);
+    `trailing.test.ts` pins the boundaries. `trailingStyle` lives on the `ColorScheme`
+    (themeable; `colors.test.ts` asserts it ≠ gap and ≠ background). Renderer caches
+    the per-row starts by view identity like occupancy and **drops them in
+    `invalidateContentCaches`** (the in-place edit path keeps the same view object —
+    without the reset, insert would show the old padding boundary until reload; the
+    exact bug this targets). `drawCells` clamps fills + glyphs to `[cols.first,
+    trailStart)` then paints one faint-grey rect for the padding tail. Scoped to the
+    letter/block tiers (the density tier already fades gaps via occupancy); trailing
+    only (leading gaps left as-is, per the request). An all-gap row now renders as a
+    faint-grey row (name in the gutter, recessive cells) rather than fully blank.
 
 - **Phase 1 quick wins (the three items) — landed 2026-06-25, smoke PASSED above**
   (frontend-only; typecheck + 221 vitest + build all green):

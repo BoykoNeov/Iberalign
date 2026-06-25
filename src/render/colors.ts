@@ -41,6 +41,11 @@ export interface ColorScheme {
   /** Solid color for density-tier occupancy bars; per-column occupancy is the
    *  alpha, so a fully-gapped column fades to the background. */
   readonly densityStyle: string;
+  /** Cell fill for TRAILING gap padding (the run of gaps past a row's last residue).
+   *  A faint grey — lighter than the interior-gap fill and recessive against the
+   *  background — so padding reads as "ragged right / no data here" rather than as a
+   *  real (interior) gap. Trailing cells also draw no `-` glyph (renderer). */
+  readonly trailingStyle: string;
   /** Cell fill (CSS color) for a residue byte. Case-insensitive; gaps and
    *  unknown residues map to the scheme's gap / fallback color. */
   fillStyleFor(byte: number): string;
@@ -56,6 +61,8 @@ export interface SchemeSpec {
   residues: Record<string, Rgb>;
   /** Fill for `-` / `.` gap bytes. */
   gap: Rgb;
+  /** Fill for trailing gap padding (default: a faint grey between gap and background). */
+  trailing?: Rgb;
   /** Fill for residues not in `residues` (ambiguity codes, `*`, unknown). */
   fallback: Rgb;
   /** Grid background (default near-white). */
@@ -97,18 +104,26 @@ export function makeScheme(spec: SchemeSpec): ColorScheme {
     label: spec.label,
     background: rgbCss(spec.background ?? [250, 250, 250]),
     densityStyle: rgbCss(spec.densityStyle ?? [68, 97, 122]),
+    trailingStyle: rgbCss(spec.trailing ?? [241, 241, 241]),
     fillStyleFor: (byte) => fill[byte & 0xff],
     inkStyleFor: (byte) => ink[byte & 0xff],
   };
 }
 
 // Shared neutrals so every scheme treats gaps / unknowns / chrome consistently.
-const GAP_RGB: Rgb = [232, 232, 232]; // light grey — present but recessive
+const GAP_RGB: Rgb = [232, 232, 232]; // light grey — interior gap, present but recessive
+const TRAILING_RGB: Rgb = [241, 241, 241]; // fainter grey — trailing padding, between gap and bg
 const FALLBACK_RGB: Rgb = [158, 158, 158]; // medium grey — "uncertain", ≠ gap
 const BG_RGB: Rgb = [250, 250, 250];
 const DENSITY_RGB: Rgb = [68, 97, 122];
 
-const neutrals = { gap: GAP_RGB, fallback: FALLBACK_RGB, background: BG_RGB, densityStyle: DENSITY_RGB };
+const neutrals = {
+  gap: GAP_RGB,
+  trailing: TRAILING_RGB,
+  fallback: FALLBACK_RGB,
+  background: BG_RGB,
+  densityStyle: DENSITY_RGB,
+};
 
 /**
  * Vivid nucleotide palette — bright, saturated red / yellow / green / blue. The

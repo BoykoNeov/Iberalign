@@ -168,23 +168,34 @@ export class Canvas2DRenderer implements Renderer {
       const row = rows.first + j;
       const base = row * width;
 
-      // TRAILING PADDING (gaps past this row's last residue) renders as bare
-      // background — never a fill or a `-` glyph — so inserting a column into one
-      // sequence doesn't make every other row look like it grew a real gap.
-      // Interior gaps stay visible. Clamp the row's drawn columns to the content
-      // span [cols.first, trailStart) intersected with the visible window.
+      // TRAILING PADDING (gaps past this row's last residue) renders as a faint-grey
+      // recessive fill with NO `-` glyph — so inserting a column into one sequence
+      // doesn't make every other row look like it grew a real (interior) gap, and a
+      // row reads "ragged right" past its content. Interior gaps stay full gaps.
+      // Clamp the row's CONTENT columns to the span [cols.first, trailStart)
+      // intersected with the visible window; the rest is the padding tail.
       const nContent = Math.max(0, Math.min(nCols, trailStart[row] - cols.first));
 
       // Fills: one rect per run-merged same-color span over the content columns only
-      // (see `runs.ts`); columns past `nContent` keep the cleared background.
+      // (see `runs.ts`).
       forEachFillRun(buf, base, cols.first, nContent, xs, scheme.fillStyleFor, (x0, w, style) => {
         ctx.fillStyle = style;
         ctx.fillRect(x0, yTop, w, h);
       });
 
+      // Padding tail: one faint-grey rect from the content edge to the window edge.
+      if (nContent < nCols) {
+        const xT = xs[nContent];
+        const wT = xs[nCols] - xT;
+        if (wT > 0) {
+          ctx.fillStyle = scheme.trailingStyle;
+          ctx.fillRect(xT, yTop, wT, h);
+        }
+      }
+
       // Glyphs (letter tier only): one atlas blit per content cell — residues as
       // themselves, INTERIOR gaps as a unified `-` (a masked/deleted cell shows the
-      // dash rather than a blank fill); trailing-pad columns are skipped → blank.
+      // dash rather than a blank fill); trailing-pad columns are skipped → no glyph.
       if (atlas) {
         for (let i = 0; i < nContent; i++) {
           const xL = xs[i];

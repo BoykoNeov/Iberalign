@@ -307,23 +307,27 @@ dependency-light and surface toolchain/linker issues fast.
   (ties → smallest byte). Memoized by view identity; `invalidate()` wired into the edit
   paths. `consensus.test.ts`. Gutter label is still `cons` (rename → "Consensus" is a
   Quick-Win in the roadmap below).
-- **Trailing-gap padding renders BLANK — code complete + green; GUI smoke PENDING
-  (2026-06-25).** Smoke-driven follow-up: insert-mode "appears to grow all sequences"
-  because splicing a column into the active row trailing-pads every OTHER row to keep
-  the matrix rectangular (the trailing-pad-only invariant — buffer MUST stay
-  rectangular, so this is a RENDER fix, not an engine change). The grid now draws each
-  row's trailing gap run (gaps past its last residue) as bare background — no fill, no
-  `-` glyph — so rows read "ragged right" instead of looking grown; INTERIOR gaps still
-  show as gaps. Generalized to ALL trailing padding (file-loaded ragged lengths,
-  cut-shorten pad), advisor-confirmed as more-correct not scope-creep. New pure
-  `model/trailing.ts::trailingGapStarts` (ends-in-residue → `width`, all-gap row → `0`;
-  `trailing.test.ts` pins the boundaries); `Canvas2DRenderer` caches it by view identity
-  like occupancy and **drops it in `invalidateContentCaches`** (the in-place edit path
-  reuses the view object — without the reset, insert shows the old padding boundary
-  until reload); `drawCells` clamps each row's fills + glyphs to `[cols.first,
-  trailStart)`. Letter/block tiers only (density already fades gaps); trailing only.
-  Smoke watch: all-gap row → fully blank row; scrolled-into-padding could read as
-  "off the end" (fallback = faint grey, one-liner). typecheck + 221 vitest + build green.
+- **Trailing-gap padding renders FAINT GREY — GUI smoke PASSED (2026-06-25, user "all
+  works").** Smoke-driven follow-up: insert-mode "appears to grow all sequences" because
+  splicing a column into the active row trailing-pads every OTHER row to keep the matrix
+  rectangular (the trailing-pad-only invariant — buffer MUST stay rectangular, so this is
+  a RENDER fix, not an engine change). The grid draws each row's trailing gap run (gaps
+  past its last residue) as a faint-grey recessive fill (`ColorScheme.trailingStyle` =
+  `[241,241,241]`, between the interior-gap `[232,232,232]` and the `[250,250,250]`
+  background) with NO `-` glyph — so rows read "ragged right" instead of looking grown;
+  INTERIOR gaps still show as full gaps. (Shipped as bare BACKGROUND first; user
+  smoke-passed it then chose the faint grey, now applied.) Generalized to ALL trailing
+  padding (file-loaded ragged lengths, cut-shorten pad), advisor-confirmed as
+  more-correct not scope-creep. New pure `model/trailing.ts::trailingGapStarts`
+  (ends-in-residue → `width`, all-gap row → `0`; `trailing.test.ts` pins the boundaries);
+  `trailingStyle` lives on `ColorScheme` (themeable; `colors.test.ts` asserts it ≠ gap,
+  ≠ background). `Canvas2DRenderer` caches the per-row starts by view identity like
+  occupancy and **drops them in `invalidateContentCaches`** (the in-place edit path
+  reuses the view object — without the reset, insert shows the old padding boundary until
+  reload); `drawCells` clamps fills + glyphs to `[cols.first, trailStart)` then paints one
+  faint-grey rect for the tail. Letter/block tiers only (density already fades gaps);
+  trailing only. An all-gap row renders as a faint-grey row. typecheck + 224 vitest +
+  build green.
 - **Consensus + coloring + shell — Phase 1 (quick wins) GUI smoke PASSED (2026-06-25,
   user "all work"). Phases 2–5 not started.** Phase 1 (frontend-only;
   typecheck + 221 vitest + build green): **spacebar → gap** (new pure

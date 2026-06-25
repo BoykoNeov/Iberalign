@@ -80,6 +80,33 @@ describe("glyph ink — always black", () => {
   });
 });
 
+describe("trailing-padding fill", () => {
+  it("is a faint grey distinct from BOTH the interior-gap fill and the background", () => {
+    for (const scheme of [VIVID_SCHEME, CLASSIC_SCHEME, COLORBLIND_SCHEME]) {
+      const gap = scheme.fillStyleFor(ord("-"));
+      expect(scheme.trailingStyle).not.toBe(gap); // padding ≠ real gap
+      expect(scheme.trailingStyle).not.toBe(scheme.background); // still reads as a cell
+    }
+  });
+
+  it("defaults when a custom spec omits `trailing`", () => {
+    const s = makeScheme({ id: "t", label: "T", residues: {}, gap: [1, 1, 1], fallback: [2, 2, 2] });
+    expect(s.trailingStyle).toBe("rgb(241, 241, 241)");
+  });
+
+  it("honors an explicit `trailing` override", () => {
+    const s = makeScheme({
+      id: "t2",
+      label: "T2",
+      residues: {},
+      gap: [1, 1, 1],
+      fallback: [2, 2, 2],
+      trailing: [9, 9, 9],
+    });
+    expect(s.trailingStyle).toBe("rgb(9, 9, 9)");
+  });
+});
+
 describe("makeScheme", () => {
   it("bakes a custom palette with gap and fallback handling", () => {
     const red: Rgb = [255, 0, 0];
