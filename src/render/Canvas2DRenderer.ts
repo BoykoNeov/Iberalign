@@ -26,6 +26,7 @@ import { forEachFillRun } from "./runs";
 import { GlyphAtlas } from "./glyphs";
 import { type ColorScheme, defaultScheme } from "./colors";
 import { isGap } from "../model/coords";
+import { trailingGapStarts } from "../model/trailing";
 import type { Renderer } from "./Renderer";
 
 // One cell of overscan so a partly-scrolled edge cell is fully drawn.
@@ -46,6 +47,11 @@ export class Canvas2DRenderer implements Renderer {
   // Per-column non-gap fraction (density tier), cached by view identity.
   private occView: AlignmentView | null = null;
   private occ: Float32Array | null = null;
+
+  // Per-row trailing-gap start column (cell tiers): columns at/after it are blank
+  // trailing padding, not real gaps. Cached by view identity like occupancy.
+  private trailView: AlignmentView | null = null;
+  private trailStart: Int32Array | null = null;
 
   constructor(canvas: HTMLCanvasElement, scheme: ColorScheme = defaultScheme()) {
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -103,6 +109,8 @@ export class Canvas2DRenderer implements Renderer {
     this.atlas = null;
     this.occ = null;
     this.occView = null;
+    this.trailStart = null;
+    this.trailView = null;
   }
 
   /**
@@ -116,6 +124,10 @@ export class Canvas2DRenderer implements Renderer {
   invalidateContentCaches(): void {
     this.occ = null;
     this.occView = null;
+    // Trailing-gap starts are buffer-derived too — an insert pads every other row,
+    // so without this they'd render the old (shorter) padding boundary until reload.
+    this.trailStart = null;
+    this.trailView = null;
   }
 
   // ---- tiers -------------------------------------------------------------
@@ -139,6 +151,7 @@ export class Canvas2DRenderer implements Renderer {
     const width = view.width;
 
     const atlas = letters ? this.ensureAtlas() : null;
+    const trailStart = this.ensureTrailingStart(view);
 
     // Device-px column / row edges, computed once for this frame's window.
     const nCols = cols.last - cols.first + 1;
@@ -152,19 +165,28 @@ export class Canvas2DRenderer implements Renderer {
       const yTop = ys[j];
       const h = ys[j + 1] - yTop;
       if (h <= 0) continue;
-      const base = (rows.first + j) * width;
+      const row = rows.first + j;
+      const base = row * width;
 
-      // Fills: one rect per run-merged same-color span (see `runs.ts`).
-      forEachFillRun(buf, base, cols.first, nCols, xs, scheme.fillStyleFor, (x0, w, style) => {
+      // TRAILING PADDING (gaps past this row's last residue) renders as bare
+      // background — never a fill or a `-` glyph — so inserting a column into one
+      // sequence doesn't make every other row look like it grew a real gap.
+      // Interior gaps stay visible. Clamp the row's drawn columns to the content
+      // span [cols.first, trailStart) intersected with the visible window.
+      const nContent = Math.max(0, Math.min(nCols, trailStart[row] - cols.first));
+
+      // Fills: one rect per run-merged same-color span over the content columns only
+      // (see `runs.ts`); columns past `nContent` keep the cleared background.
+      forEachFillRun(buf, base, cols.first, nContent, xs, scheme.fillStyleFor, (x0, w, style) => {
         ctx.fillStyle = style;
         ctx.fillRect(x0, yTop, w, h);
       });
 
-      // Glyphs (letter tier only): one atlas blit per cell — residues as
-      // themselves, gaps as a unified `-` so a gap reads as a gap (and a masked/
-      // deleted cell shows the dash rather than a blank fill).
+      // Glyphs (letter tier only): one atlas blit per content cell — residues as
+      // themselves, INTERIOR gaps as a unified `-` (a masked/deleted cell shows the
+      // dash rather than a blank fill); trailing-pad columns are skipped → blank.
       if (atlas) {
-        for (let i = 0; i < nCols; i++) {
+        for (let i = 0; i < nContent; i++) {
           const xL = xs[i];
           const w = xs[i + 1] - xL;
           if (w <= 0) continue;
@@ -217,6 +239,16 @@ export class Canvas2DRenderer implements Renderer {
     this.atlas?.dispose();
     this.atlas = new GlyphAtlas(this.scheme, this.dpr);
     return this.atlas;
+  }
+
+  /** Per-row trailing-gap start column, computed once per loaded view (cheap unless
+   *  rows are mostly gaps; scans from the right). Drives drawing trailing padding as
+   *  blank background; dropped by `invalidateContentCaches` after an in-place edit. */
+  private ensureTrailingStart(view: AlignmentView): Int32Array {
+    if (this.trailView === view && this.trailStart) return this.trailStart;
+    this.trailStart = trailingGapStarts(view.buffer, view.width, view.numRows);
+    this.trailView = view;
+    return this.trailStart;
   }
 
   /** Per-column non-gap fraction, computed once per loaded view (O(width×rows)). */
