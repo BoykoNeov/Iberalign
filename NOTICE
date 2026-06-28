@@ -1,14 +1,21 @@
 Iberalign
-Copyright 2026 Iberalign contributors
+Copyright (c) 2026 Boyko Neov. All rights reserved.
 
-This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+This software was originally created by Boyko Neov.
+
+This product is licensed under the Boyko Non-Commercial License
+Version 1.0 (BNCL-1.0). Redistributions of this software and
+derivative works must retain this NOTICE file and the LICENSE file.
+
+Commercial use is prohibited unless separately licensed by the
+copyright holder.
 
 ------------------------------------------------------------------------------
 Third-party components (permissive, redistributed as part of the build):
-  - thiserror (MIT OR Apache-2.0)          — align-core error types
+  - thiserror (MIT OR Apache-2.0)           — align-core error types
   - proptest  (MIT OR Apache-2.0, dev only) — property tests
   - Tauri v2 and ecosystem (MIT OR Apache-2.0) — desktop shell
-  - React (MIT), Vite (MIT)                — frontend
+  - React (MIT), Vite (MIT)                 — frontend
 
 ------------------------------------------------------------------------------
 External alignment tools are NOT bundled or linked. Iberalign detects and
@@ -18,4 +25,4 @@ invokes them as separate processes only when the user has installed them:
   - Clustal Omega  (GPL)       — invoke-only; never linked or redistributed
 
 Keeping GPL tools as separate, user-installed processes keeps Iberalign's own
-code permissive. See iberprime-spec.md §11.
+code under a non-GPL license. See iberprime-spec.md §11.
