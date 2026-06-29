@@ -61,6 +61,8 @@ import {
   deleteRows,
   deleteColumns,
   type DeleteResult,
+  pairwiseAlign,
+  type PairwiseResult,
   undoEdit,
   redoEdit,
 } from "../ipc/edit";
@@ -253,6 +255,9 @@ export default function Grid({ view, onResized }: GridProps) {
   // Cut bridge: like `doPaste`, `doCut` is effect-scoped (it needs `runEdit`), so
   // the menu bar Cut button + Ctrl/⌘+X reach it through this ref.
   const doCutRef = useRef<() => void>(() => {});
+  // Align bridge: `doAlign` is effect-scoped (it needs `runEdit`/`store`), so the
+  // menu bar "Align selected" item reaches it through this ref.
+  const doAlignRef = useRef<() => void>(() => {});
   // Structural-delete bridges: `doDeleteRows`/`doDeleteColumns` are effect-scoped
   // (they need the resync helper), so the menu bar buttons, the context menu, and
   // the Delete key reach them through these refs.
@@ -386,6 +391,9 @@ export default function Grid({ view, onResized }: GridProps) {
 
   // Menu bar Cut button → the effect-scoped cut flow (via the ref above).
   const handleCut = useCallback(() => doCutRef.current(), []);
+
+  // Menu bar "Align selected" → the effect-scoped pairwise-align flow (via the ref).
+  const handleAlign = useCallback(() => doAlignRef.current(), []);
 
   // Toggle the Delete-key mode (Shorten | Mask) from the menu bar; mirror into the
   // ref the once-bound keydown reads.
@@ -969,6 +977,57 @@ export default function Grid({ view, onResized }: GridProps) {
       showMsg(`Cut ${dims.cols} × ${dims.rows} (${shorten ? "shortened" : "masked"})`);
     };
     doCutRef.current = doCut;
+
+    // Pairwise-align the two SELECTED sequences (M3): replace their rows in place
+    // with the aligned pair, reversibly. GLOBAL only (Needleman–Wunsch) — end to
+    // end, lossless: every residue of both rows is kept, so the edit round-trips.
+    // (Local/Smith–Waterman trims to the matched region, which would discard
+    // residues; it's deferred to a non-destructive view in a later milestone.)
+    // The action handles exactly two rows; 3+ is multiple-sequence alignment
+    // (NP-hard) → deferred to MAFFT (M6), so it reports instead of guessing. The
+    // command returns score/%id/length and mutates the matrix (its width may grow);
+    // we capture the result in a closure and reuse `runEdit` to swap in the
+    // post-edit buffer (`getRenderBuffer`) — the row count, names, and alphabet are
+    // unchanged, so the fast in-place resize path applies and undo/redo ride the
+    // normal width-changing route. Serialized via `editingRef`.
+    const doAlign = async () => {
+      const v = viewRef.current;
+      if (!v) return;
+      const sel = store.getSelection();
+      if (!sel) {
+        showMsg("Select 2 sequences to align", "warn");
+        return;
+      }
+      const { r0, r1 } = normalize(sel);
+      const rows = r1 - r0 + 1;
+      if (rows < 2) {
+        showMsg("Select 2 sequences to align", "warn");
+        return;
+      }
+      if (rows > 2) {
+        showMsg("Aligning 3+ sequences needs MAFFT (coming soon)", "warn");
+        return;
+      }
+      let result: PairwiseResult | null = null;
+      const ok = await runEdit(async () => {
+        result = await pairwiseAlign(r0, r1, "global");
+        return await getRenderBuffer();
+      });
+      if (ok && result) {
+        const r: PairwiseResult = result;
+        // Two all-gap rows ⇒ both ungapped sequences are empty ⇒ length 0; the
+        // command skipped the edit (it would wipe the rows to width 0), so report
+        // it rather than claiming a 0-column alignment.
+        if (r.length === 0) {
+          showMsg("Nothing to align (both sequences are empty)", "warn");
+          return;
+        }
+        showMsg(
+          `Aligned: score ${r.score} · ${r.percentIdentity.toFixed(1)}% identity · ${r.length} cols`,
+        );
+      }
+    };
+    doAlignRef.current = doAlign;
 
     // Keyboard residue entry: write `letter` at the cursor's ACTIVE cell, then
     // advance the cursor one cell right. Two modes (the menu bar / Insert-key toggle):
@@ -1668,6 +1727,8 @@ export default function Grid({ view, onResized }: GridProps) {
         onCopy={doCopy}
         onPaste={handlePaste}
         onCut={handleCut}
+        canAlign={(selInfo?.rows ?? 0) >= 2}
+        onAlign={handleAlign}
         onOpenConsensus={openConsensus}
         schemes={SCHEMES}
         schemeId={schemeId}

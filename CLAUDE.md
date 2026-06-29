@@ -410,8 +410,8 @@ dependency-light and surface toolchain/linker issues fast.
   questions (menu bar; same-type exposes all 3 displays; track+grid coloring both; majority
   default strict >50%).
   </details>
-- **M3 pairwise alignment — engine + CLI + IPC COMMITTED; UI code-complete (GLOBAL-ONLY)
-  but UNCOMMITTED, pending GUI smoke (deferred to a future session).** Hand-rolled Gotoh
+- **M3 pairwise alignment — COMPLETE; all phases COMMITTED; GUI smoke PASSED + pushed
+  (2026-06-29).** Hand-rolled Gotoh
   affine NW/SW in `align-core` (`align.rs` `pairwise(a,b,&matrix,mode,scoring)` — 3-state
   M/X/Y DP, `NEG=-1e9` sentinel, deterministic tie M>X>Y, %-identity = identical-non-gap-
   cols / length) + `matrix.rs` `SubstitutionMatrix` (BLOSUM62/45/80 + PAM250 + match/
@@ -421,10 +421,10 @@ dependency-light and surface toolchain/linker issues fast.
   gap_extend?)` command (reads UNGAPPED residues, applies a reversible `SpliceRows` via
   `realign_splice` — replace the 2 rows padded to `target=max(W,aligned)` or `W` when only
   2 rows, widen others; returns `{score,percent_identity,length}` DTO) + `ipc/edit.ts::
-  pairwiseAlign` wrapper = `b5d5305`. **Phase D (UI) is GLOBAL-ONLY + code-complete + green
-  (typecheck / 295 vitest / build) but sits UNCOMMITTED in the working tree** (`Grid.tsx` +
-  `MenuBar.tsx` + the `commands.rs` empty-result guard, kept together so D lands atomically
-  after smoke). **User-decided 2026-06-29:** (1) **NO lossy in-place edit ⇒ GLOBAL only** —
+  pairwiseAlign` wrapper = `b5d5305`. **Phase D (UI) is GLOBAL-ONLY, COMMITTED + pushed**
+  (typecheck / 295 vitest / build green; GUI smoke PASSED 2026-06-29, user "all works") —
+  `Grid.tsx` (`doAlign`) + `MenuBar.tsx` (Align menu) + the `commands.rs` empty-result guard,
+  landed atomically. **User-decided 2026-06-29:** (1) **NO lossy in-place edit ⇒ GLOBAL only** —
   the Local (SW) option was REMOVED from "Align selected" (in-place Local trims rows to the
   matched region, discarding residues); the engine + CLI KEEP Local for a future
   non-destructive view/report. (2) **Adjacent-only** for now (selection is one rectangle ⇒

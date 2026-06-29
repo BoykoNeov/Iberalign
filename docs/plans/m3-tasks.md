@@ -41,9 +41,9 @@ reversible replace of exactly 2 selected rows; 3+ → "requires MAFFT" (M6 next)
 - [x] `lib.rs`: registered `commands::pairwise_align`
 - [x] `src/ipc/edit.ts`: `pairwiseAlign(...)` wrapper + `PairwiseResult`/`PairwiseMode` types + fromWire
 - [x] cargo test workspace + clippy + fmt + typecheck green (33 iberalign tests)
-- [ ] frontend resync after the edit (buffer → `resizeContents`); undo/redo round-trips — Phase D wiring
+- [x] frontend resync after the edit (buffer → `resizeContents`); undo/redo round-trips — Phase D wiring
 
-## Phase D — UI (`src/ui`; GLOBAL-only; code complete + green; GUI smoke DEFERRED)
+## Phase D — UI (`src/ui`; GLOBAL-only; code complete + green; GUI smoke PASSED 2026-06-29) ✅ DONE
 
 **Global-only decision (2026-06-29, user):** in-place Local is lossy (trims rows
 to the matched region) → the Local/Method option was **removed** from "Align
@@ -61,12 +61,12 @@ selected". The engine + CLI keep Local for a future non-destructive view.
 - [x] empty-edge guard: two all-gap rows ⇒ length 0 ⇒ command skips the edit, UI says
       "Nothing to align (both sequences are empty)"
 - [x] typecheck + 295 vitest + build green
-- [ ] **GUI smoke (carry-over, future session)**: select 2 rows → Align → the two rows
-      are replaced by the aligned pair, readout shows score/%id/length; `Ctrl/⌘+Z`
+- [x] **GUI smoke PASSED (2026-06-29, user "all works")**: select 2 rows → Align → the two
+      rows are replaced by the aligned pair, readout shows score/%id/length; `Ctrl/⌘+Z`
       restores; a 3+ selection shows the MAFFT note; <2 disables the item; protein vs DNA
       pick the right default matrix; re-align an already-aligned pair (residue resync);
       width-shrink case (2-row alignment narrower than before)
-- [ ] (smoke already had advisor review; commit/push of D is this session's wrap-up)
+- [x] commit/push of D — `src/ui/{Grid,MenuBar}.tsx` + `commands.rs` empty-result guard
 
 ## Deferred to a future session (design open — user, 2026-06-29)
 - [ ] **Block / sub-area align**: when only part of some sequences is selected and gaps must

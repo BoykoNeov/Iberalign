@@ -916,8 +916,13 @@ pub async fn pairwise_align(
     let b = ds.sequences[row_b].residues.clone();
     let result = pairwise(&a, &b, &matrix, mode, scoring);
 
-    let cmd = realign_splice(ds, row_a, row_b, &result.aligned_a, &result.aligned_b);
-    history.apply(ds, cmd).map_err(|e| e.to_string())?;
+    // An empty alignment (a local match that found nothing, or all-gap inputs)
+    // would splice the rows to width 0 — skip the edit and let the caller report
+    // "no alignment found" instead of silently wiping the rows.
+    if result.length > 0 {
+        let cmd = realign_splice(ds, row_a, row_b, &result.aligned_a, &result.aligned_b);
+        history.apply(ds, cmd).map_err(|e| e.to_string())?;
+    }
 
     Ok(PairwiseResultDto {
         score: result.score,

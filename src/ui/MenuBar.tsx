@@ -90,6 +90,13 @@ interface MenuBarProps {
   /** Cut the current selection to the clipboard (no-op upstream when nothing is
    *  selected) — copy then remove, in the cut mode. */
   onCut: () => void;
+  /** Pairwise-align the two selected sequences in place (Align → Align selected).
+   *  Enabled only when at least two rows are selected; the handler reports the
+   *  exact case (2 ⇒ align, 3+ ⇒ "requires MAFFT"). Global (Needleman–Wunsch)
+   *  only — end-to-end and lossless; Local (Smith–Waterman) trims to the matched
+   *  region, so it's deferred to a non-destructive view in a later milestone. */
+  canAlign: boolean;
+  onAlign: () => void;
   /** Open the consensus & coloring options modal. */
   onOpenConsensus: () => void;
   /** The selectable color schemes + the active one's id (the View scheme picker). */
@@ -164,6 +171,8 @@ export default function MenuBar(props: MenuBarProps) {
     onCopy,
     onPaste,
     onCut,
+    canAlign,
+    onAlign,
     onOpenConsensus,
     schemes,
     schemeId,
@@ -304,6 +313,19 @@ export default function MenuBar(props: MenuBarProps) {
             { value: "replace", label: "Replace", title: "Typing overwrites the cell at the cursor (the Insert key toggles this)" },
             { value: "insert", label: "Insert", title: "Typing splices a new column into the sequence; the alignment grows" },
           ],
+        },
+      ],
+    },
+    {
+      key: "align",
+      label: "Align",
+      items: [
+        {
+          kind: "action",
+          key: "alignsel",
+          label: "Align selected sequences",
+          disabled: !canAlign,
+          onClick: onAlign,
         },
       ],
     },
