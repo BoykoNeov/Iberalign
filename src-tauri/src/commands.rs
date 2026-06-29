@@ -4,8 +4,8 @@
 
 use crate::state::AppState;
 use align_core::{
-    pairwise, AlignMode, Alphabet, CellWrite, Dataset, EditCmd, RawRecord, RowData, RowSplice,
-    Scoring, SeqId, SubstitutionMatrix,
+    pairwise, progressive_align, AlignMode, Alphabet, CellWrite, Dataset, EditCmd, RawRecord,
+    RowData, RowSplice, Scoring, SeqId, SubstitutionMatrix,
 };
 use serde::Serialize;
 use std::sync::Mutex;
@@ -931,6 +931,142 @@ pub async fn pairwise_align(
     })
 }
 
+// ---- multiple-sequence alignment (in-process progressive) ------------------
+
+/// Outcome of [`msa_align`]: how many sequences were aligned and the resulting
+/// alignment width. Small JSON for the status readout; the matrix changed (its
+/// width may have grown) but the row count / names / alphabet did not, so the
+/// caller re-syncs its render buffer from [`get_render_buffer`] (no meta refetch).
+#[derive(Serialize)]
+pub struct MsaResultDto {
+    pub num_seqs: usize,
+    pub length: usize,
+}
+
+/// Build the reversible edit that replaces each selected `row` with its aligned
+/// form, keeping the matrix rectangular. Generalizes [`realign_splice`] from two
+/// rows to N: each selected row is spliced to its aligned bytes padded to
+/// `target`; non-selected rows trailing-pad if the alignment grew. `target` is the
+/// alignment's `w` when **every** row is selected (so a re-alignment can shrink the
+/// matrix), else `max(w, current_width)` (untouched rows never lose content). One
+/// [`EditCmd::SpliceRows`] ⇒ one undo step. `rows[i]` pairs with `aligned[i]`
+/// (`progressive_align` returns rows in input order), and `aligned` rows share one
+/// width.
+fn msa_splice(ds: &Dataset, rows: &[usize], aligned: &[Vec<u8>]) -> EditCmd {
+    let cur = ds.alignment.width;
+    let n = ds.alignment.num_rows();
+    let w = aligned.first().map(|r| r.len()).unwrap_or(0);
+    let all_selected = rows.len() == n;
+    let target = if all_selected { w } else { w.max(cur) };
+
+    let pad_to_target = |bytes: &[u8]| -> Vec<u8> {
+        let mut v = bytes.to_vec();
+        v.resize(target, b'-');
+        v
+    };
+
+    let mut selected = vec![false; n];
+    let mut splices = Vec::with_capacity(rows.len());
+    for (&row, ab) in rows.iter().zip(aligned) {
+        selected[row] = true;
+        splices.push(RowSplice {
+            row,
+            col: 0,
+            remove: cur,
+            bytes: pad_to_target(ab),
+        });
+    }
+    if target > cur {
+        let tail = vec![b'-'; target - cur];
+        for (r, &is_sel) in selected.iter().enumerate() {
+            if !is_sel {
+                splices.push(RowSplice {
+                    row: r,
+                    col: cur,
+                    remove: 0,
+                    bytes: tail.clone(),
+                });
+            }
+        }
+    }
+    EditCmd::SpliceRows { splices }
+}
+
+/// Multiple-sequence-align the selected rows (their UNGAPPED residues) with the
+/// in-process progressive aligner and replace their rows in place, reversibly. The
+/// matrix width may grow; the row count is unchanged. `matrix` / `gap_open` /
+/// `gap_extend` default to the alphabet **widened over all selected rows** (protein
+/// → BLOSUM62 / −11 / −1, nucleotide → match·mismatch 2/−1 / −10 / −1). Errors if
+/// nothing is loaded, fewer than two distinct rows are selected, or a row is out of
+/// bounds. Returns the sequence count and width; the caller re-syncs the render
+/// buffer.
+#[tauri::command]
+pub async fn msa_align(
+    rows: Vec<usize>,
+    matrix: Option<String>,
+    gap_open: Option<i32>,
+    gap_extend: Option<i32>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<MsaResultDto, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+
+    let n = ds.alignment.num_rows();
+    // Normalize + validate the row list: in-bounds, sorted, deduped, ≥2 distinct.
+    let mut rows = rows;
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.len() < 2 {
+        return Err("select at least two different sequences to align".to_string());
+    }
+    if *rows.last().expect("non-empty after the len check") >= n {
+        return Err(format!("row out of bounds (alignment has {n} rows)"));
+    }
+
+    // Default the matrix/scoring by widening the alphabet over ALL selected rows.
+    let alphabet = rows
+        .iter()
+        .map(|&r| ds.sequences[r].alphabet)
+        .reduce(|acc, a| acc.widen(a))
+        .expect("at least two rows");
+    let matrix = match &matrix {
+        Some(name) => {
+            SubstitutionMatrix::by_name(name).ok_or_else(|| format!("unknown matrix '{name}'"))?
+        }
+        None => SubstitutionMatrix::default_for(alphabet),
+    };
+    let defaults = Scoring::default_for(alphabet);
+    let scoring = Scoring {
+        gap_open: gap_open.unwrap_or(defaults.gap_open),
+        gap_extend: gap_extend.unwrap_or(defaults.gap_extend),
+    };
+
+    // Align the ungapped residues (a fresh MSA ignores any prior gaps in the rows).
+    let seqs: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|&r| ds.sequences[r].residues.clone())
+        .collect();
+    let refs: Vec<&[u8]> = seqs.iter().map(|v| v.as_slice()).collect();
+    let result = progressive_align(&refs, &matrix, scoring);
+
+    // Every selected row all-gap ⇒ width 0 — skip the edit (don't wipe the rows to
+    // nothing) and let the caller report it.
+    if result.length > 0 {
+        let cmd = msa_splice(ds, &rows, &result.rows);
+        history.apply(ds, cmd).map_err(|e| e.to_string())?;
+    }
+
+    Ok(MsaResultDto {
+        num_seqs: rows.len(),
+        length: result.length,
+    })
+}
+
 /// Undo the most recent edit; returns the post-edit render buffer (empty when
 /// there is nothing to undo). Errors if nothing is loaded.
 #[tauri::command]
@@ -1583,6 +1719,52 @@ mod tests {
         assert_eq!(ds.alignment.width, 4);
         assert_eq!(ds.alignment.rows[0].gapped, b"A-GT");
         assert_eq!(ds.alignment.rows[1].gapped, b"T-TT");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGGG");
+    }
+
+    // ---- MSA realign splice (N rows) --------------------------------------
+
+    #[test]
+    fn msa_splice_all_rows_shrinks_to_alignment_width() {
+        // Every row selected: the MSA becomes the whole alignment, so the matrix
+        // can shrink to the aligned width (here 4, from a padded width 6).
+        let mut ds =
+            Dataset::from_records(&[rec("a", "AC--GT"), rec("b", "ACG-GT"), rec("c", "AC-GGT")]);
+        let mut history = align_core::EditStack::new();
+        let aligned = vec![b"ACGT".to_vec(), b"ACGT".to_vec(), b"ACGT".to_vec()];
+        let cmd = msa_splice(&ds, &[0, 1, 2], &aligned);
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.alignment.rows[2].gapped, b"ACGT");
+        // One reversible edit: undo restores the originals + width.
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.rows[0].gapped, b"AC--GT");
+        assert_eq!(ds.alignment.rows[2].gapped, b"AC-GGT");
+    }
+
+    #[test]
+    fn msa_splice_subset_widens_other_rows() {
+        // Four rows, width 4; align rows 0,1,3 into width 6 → the unselected row 2
+        // trailing-pads to 6 (content untouched) to keep the matrix square.
+        let mut ds = Dataset::from_records(&[
+            rec("a", "ACGT"),
+            rec("b", "TTTT"),
+            rec("c", "GGGG"),
+            rec("d", "CCCC"),
+        ]);
+        let mut history = align_core::EditStack::new();
+        let aligned = vec![b"A-C-GT".to_vec(), b"T-T-TT".to_vec(), b"C-C-CC".to_vec()];
+        let cmd = msa_splice(&ds, &[0, 1, 3], &aligned);
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.rows[0].gapped, b"A-C-GT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"T-T-TT");
+        assert_eq!(ds.alignment.rows[3].gapped, b"C-C-CC");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGGG--"); // untouched, padded
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
         assert_eq!(ds.alignment.rows[2].gapped, b"GGGG");
     }
 }

@@ -169,6 +169,43 @@ export async function pairwiseAlign(
   return { score: wire.score, percentIdentity: wire.percent_identity, length: wire.length };
 }
 
+/** Outcome of {@link msaAlign}: how many sequences were aligned and the resulting
+ *  alignment width. Mirror of the Rust `MsaResultDto`. */
+export interface MsaResult {
+  numSeqs: number;
+  length: number;
+}
+
+interface MsaResultWire {
+  num_seqs: number;
+  length: number;
+}
+
+/**
+ * Multiple-sequence-align the selected rows (by alignment-row index) with the
+ * in-process progressive aligner and replace their rows in place — reversibly
+ * (undo/redo). `matrix`/`gapOpen`/`gapExtend` default to the alphabet widened over
+ * all selected rows when omitted. Like {@link pairwiseAlign}, the matrix WIDTH may
+ * grow but the row count, names, and alphabet are unchanged — so this returns a
+ * small JSON status and the caller re-syncs its render buffer from
+ * `getRenderBuffer` + `view.resizeContents`. Undo/redo ride the width-changing
+ * `undoEdit`/`redoEdit` path.
+ */
+export async function msaAlign(
+  rows: number[],
+  matrix?: string,
+  gapOpen?: number,
+  gapExtend?: number,
+): Promise<MsaResult> {
+  const wire = await invoke<MsaResultWire>("msa_align", {
+    rows,
+    matrix: matrix ?? null,
+    gapOpen: gapOpen ?? null,
+    gapExtend: gapExtend ?? null,
+  });
+  return { numSeqs: wire.num_seqs, length: wire.length };
+}
+
 /** Undo the most recent edit. Empty result ⇒ nothing to undo. */
 export function undoEdit(): Promise<Uint8Array> {
   return editBuffer("undo_edit");
