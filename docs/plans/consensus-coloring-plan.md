@@ -71,7 +71,50 @@ starts. This file is the agreed design + decisions + phasing.
   10k×10k is the ceiling, not the target — debounce only if it janks). Folds in the
   still-pending keyboard-entry + strict-IUPAC consensus-track smokes.
 
-**Phases 2–5 below: not started.**
+- **Phase 2 (consensus engine) — code complete + green (typecheck + 253 vitest +
+  build; +28 new tests; advisor-reviewed).** Pure model, NO UI — the consensus track is
+  byte-for-byte unchanged (its `columnConsensus` now routes through the new engine under
+  the alphabet default). Two files:
+  - **`src/model/profile.ts`** — the shared backbone the advisor confirmed: a per-column
+    `ColumnProfiles` (structure-of-arrays, length = width) holding `nonGap` / `gap` /
+    `topByte` (uppercase, smallest-byte tiebreak) / `topCount` / `distinct` / `baseMask`
+    (OR of nucleotide base-bits). The KEY result: that compact set is sufficient for EVERY
+    rule AND both Phase-4 colorings — no full per-residue histograms (~15 bytes/col). One
+    reused 256-count table, column-major, `touched`-list reset (cache O(alphabet) not
+    O(width×256)). `BASE_MASK` moved here. `columnProfiles(view, r0, r1)` clamps + accepts
+    reversed bounds. Storing `nonGap` and `gap` separately keeps the Phase-4 conservation
+    denominator choice open (`topCount/nonGap` vs `/(nonGap+gap)`).
+  - **`src/model/consensus.ts`** — the ordered pipeline `consensusBytes(profiles, config,
+    alphabet)`: (1) gap short-circuit FIRST (`gap-priority`→`-` / `star-if-gap`→`*` /
+    `ignore`), (2) `nonGap==0 → '-'` guard, (3) agreement rule
+    {`strict-iupac` | `all-identical` | `same-type{ry-code|majority-base|iupac-class}` |
+    `majority{threshold}`}, (3') `noConsensus` fallback (`gap`|`star`, non-strict rules
+    only). `ConsensusConfig` type exported. `columnConsensus` reimplemented on top via
+    `defaultConfigFor(alphabet)` (DNA/RNA → strict-IUPAC; anything else → plurality ==
+    `majority@0`). **Four advisor corrections baked in from the start:** (a) RNA U-rewrite
+    centralized in `decodeMask(mask,rna)` so BOTH mask-decoding rules (strict-iupac AND
+    same-type/iupac-class) get it; (b) **integer-exact** majority threshold (`topCount*1000
+    > round(threshold*1000)*nonGap`) — fp `>` mis-rounds e.g. 3/5 vs 0.6; (c) `same-type/
+    iupac-class` cutoff = **≤2 distinct bases** (see open question below); (d) pipeline
+    order pinned so `star-if-gap` reaches an all-gap column. Back-compat verified
+    byte-identical (advisor): protein plurality ≡ majority@0 incl. the `["W","A"]→A` tie;
+    strict-iupac `mask==0 → '-'` quirk kept (new rules send `mask==0` → fallback).
+
+**Phases 3–5 below: not started.** (Profile CACHING is deferred to Phase 4, when the
+colorings share the profile; Phase 2's `columnConsensus` builds a transient profile per
+call — same cost as before, the track's by-view-identity byte cache untouched.)
+
+## Open questions (surface in the Phase-3 dialog)
+
+- **`same-type / iupac-class` cutoff is ≤2 distinct bases.** Advisor-greenlit as the
+  defensible plain reading ("same type" with S/W/K/M = 2-base codes; it MUST cut below 4
+  or it is literally strict-iupac), but it is the one rule whose semantics the user hasn't
+  explicitly confirmed. The Phase-3 dialog should surface/confirm it (one branch in
+  `sameType()`, trivially flippable to include the 3-base codes B/D/H/V).
+- **`majority-base` / `iupac-class` can echo an ambiguity code straight from the data.**
+  If the source contains a literal `R`/`N`/`*`, the top residue or class can be that code
+  — a known limitation of deriving consensus from possibly-malformed input, not a bug. No
+  code now; flagged so it is a known edge, not a surprise.
 
 ## Requests (verbatim intent)
 

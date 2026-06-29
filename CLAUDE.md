@@ -335,7 +335,30 @@ dependency-light and surface toolchain/linker issues fast.
   trailing only. An all-gap row renders as a recessive-grey row. typecheck + 225 vitest +
   build green.
 - **Consensus + coloring + shell — Phase 1 (quick wins) GUI smoke PASSED (2026-06-25,
-  user "all work"). Phases 2–5 not started.** Phase 1 (frontend-only;
+  user "all work"); Phase 2 (engine) code complete + green; Phases 3–5 not started.**
+  **Phase 2 (consensus engine) — pure model, NO UI, the consensus track is byte-for-byte
+  unchanged** (typecheck + 253 vitest + build; +28 new tests; advisor-reviewed +
+  back-compat verified byte-identical). New **`model/profile.ts`**: a per-column
+  `ColumnProfiles` (structure-of-arrays — `nonGap`/`gap`/`topByte`[uppercase, smallest-byte
+  tie]/`topCount`/`distinct`/`baseMask`) that the advisor confirmed is sufficient for EVERY
+  rule AND both Phase-4 colorings (no full histograms; ~15 bytes/col; one reused 256-count
+  table, column-major, `touched`-reset). New pipeline in **`model/consensus.ts`**:
+  `consensusBytes(profiles, config, alphabet)` runs **gap short-circuit FIRST**
+  (`gap-priority`/`star-if-gap`/`ignore`) → `nonGap==0→'-'` guard → agreement rule
+  (`strict-iupac` | `all-identical` | `same-type{ry-code|majority-base|iupac-class}` |
+  `majority{threshold}`) → `noConsensus` fallback (non-strict rules only). `columnConsensus`
+  reimplemented on top via `defaultConfigFor(alphabet)` (DNA/RNA → strict-IUPAC; else →
+  plurality == `majority@0`). **Four advisor fixes baked in:** RNA U-rewrite centralized in
+  `decodeMask` (hits strict-iupac AND same-type/iupac-class); **integer-exact** majority
+  threshold (`topCount*1000 > round(threshold*1000)*nonGap`, fp `>` mis-rounds 3/5 vs 0.6);
+  `same-type/iupac-class` cutoff = **≤2 distinct bases** (OPEN QUESTION for the Phase-3
+  dialog — defensible plain reading, must cut below 4 or it's strict-iupac; user hasn't
+  explicitly confirmed); pipeline order pinned so `star-if-gap` reaches an all-gap column.
+  **Profile caching is deferred to Phase 4** (transient profile per `columnConsensus` call;
+  the track's by-view byte cache is untouched). Known limitation: `majority-base`/
+  `iupac-class` can echo a literal ambiguity code (`R`/`N`/`*`) from malformed source data.
+  See `docs/plans/consensus-coloring-plan.md` (Phase 2 status + Open questions). **Phase 1
+  (quick wins)** (frontend-only;
   typecheck + 221 vitest + build green): **spacebar → gap** (new pure
   `model/typing.ts::residueForKey` maps space → `-`, residue-glyph → itself, else
   `null`-to-fall-through; `isResidueKey` stays strict; `Grid.tsx` keydown routes

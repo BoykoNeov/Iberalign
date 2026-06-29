@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { AlignmentView } from "./view";
-import { columnConsensus } from "./consensus";
+import { columnConsensus, consensusBytes, type ConsensusConfig } from "./consensus";
+import { columnProfiles } from "./profile";
 import type { AlphabetLabel } from "./types";
 
 // Build a tiny view from rows of equal-length residue strings.
@@ -113,5 +114,119 @@ describe("columnConsensus — row range + clamping", () => {
       alphabet: "DNA",
     });
     expect(columnConsensus(empty, 0, 0).length).toBe(0);
+  });
+});
+
+// ── The configurable pipeline (Phase 2 engine) ───────────────────────────────
+
+// Base config: strict-IUPAC, gaps ignored — equivalent to today's DNA default.
+const STRICT: ConsensusConfig = {
+  gap: "ignore",
+  rule: "strict-iupac",
+  sameTypeDisplay: "ry-code",
+  majorityThreshold: 0.5,
+  noConsensus: "gap",
+};
+
+// Run the pipeline for an explicit config over the full row range.
+function cons(rows: string[], cfg: Partial<ConsensusConfig>, alphabet: AlphabetLabel = "DNA"): string {
+  const v = viewFrom(rows, alphabet);
+  const p = columnProfiles(v, 0, v.numRows - 1);
+  return str(consensusBytes(p, { ...STRICT, ...cfg }, alphabet));
+}
+
+describe("consensusBytes — gap handling (step 1, short-circuit first)", () => {
+  it("gap-priority: any gap in a column → '-'", () => {
+    // col0 A/A → A ; col1 A/- → gap present → '-' (overrides the rule)
+    expect(cons(["AA", "A-"], { gap: "gap-priority" })).toBe("A-");
+  });
+
+  it("star-if-gap: any gap in a column → '*', including an all-gap column", () => {
+    // col0 A/A → A ; col1 -/- → all gap → '*' (NOT '-': short-circuit beats the
+    // nonGap==0 guard — the ordering the pipeline pins).
+    expect(cons(["A-", "A-"], { gap: "star-if-gap" })).toBe("A*");
+  });
+
+  it("ignore (default) leaves gapped-but-present columns to the rule", () => {
+    expect(cons(["AA", "A-"], { gap: "ignore" })).toBe("AA"); // col1 A only → A
+  });
+});
+
+describe("consensusBytes — all-identical", () => {
+  it("one distinct residue → that residue; any variation → fallback", () => {
+    // col0 A/A → A ; col1 A/G → 2 distinct → fallback '-'
+    expect(cons(["AA", "AG"], { rule: "all-identical" })).toBe("A-");
+  });
+
+  it("gaps are ignored, so identical-around-gaps still agrees", () => {
+    expect(cons(["A", "-", "A"], { rule: "all-identical" })).toBe("A");
+  });
+
+  it("noConsensus: star emits '*' on disagreement", () => {
+    expect(cons(["AA", "AG"], { rule: "all-identical", noConsensus: "star" })).toBe("A*");
+  });
+});
+
+describe("consensusBytes — same-type", () => {
+  it("ry-code: all-purine → R, all-pyrimidine → Y, mixed → fallback", () => {
+    // col0 A/G purine → R ; col1 C/T pyrimidine → Y ; col2 A/C mixed → '-'
+    expect(cons(["ACA", "GTC"], { rule: "same-type", sameTypeDisplay: "ry-code" })).toBe("RY-");
+  });
+
+  it("ry-code: a conserved single base is still classed by type", () => {
+    // all-A → purine → R ; all-C → pyrimidine → Y
+    expect(cons(["AC", "AC"], { rule: "same-type", sameTypeDisplay: "ry-code" })).toBe("RY");
+  });
+
+  it("majority-base: same purine/pyrimidine test, but shows the top base", () => {
+    // col0 A,A,G purine → top A ; col1 C,T,T pyrimidine → top T ; col2 A,C mixed → '-'
+    expect(
+      cons(["ACA", "ATC", "GTC"], { rule: "same-type", sameTypeDisplay: "majority-base" }),
+    ).toBe("AT-");
+  });
+
+  it("iupac-class: ≤2 distinct bases → their code; 3+ bases → fallback", () => {
+    // col0 C/G → S (2 bases) ; col1 A/C/G → 3 bases → fallback '-'
+    expect(cons(["CA", "GC", "GG"], { rule: "same-type", sameTypeDisplay: "iupac-class" })).toBe(
+      "S-",
+    );
+  });
+
+  it("non-nucleotide residues have no type → fallback", () => {
+    expect(cons(["*", "*"], { rule: "same-type", sameTypeDisplay: "ry-code" })).toBe("-");
+  });
+
+  it("iupac-class rewrites a pure-T class to U under RNA", () => {
+    // col0 T/T (RNA) → mask is the T-bit → IUPAC 'T' → rewritten 'U'
+    expect(cons(["T", "T"], { rule: "same-type", sameTypeDisplay: "iupac-class" }, "RNA")).toBe(
+      "U",
+    );
+  });
+});
+
+describe("consensusBytes — majority (integer-exact threshold)", () => {
+  it("default >50% is exclusive: a 3/6 tie fails, 4/6 passes", () => {
+    // col0 A×4,G×2 → 4/6 > 50% → A ; col1 A×3,G×3 → 3/6 == 50%, not > → '-'
+    expect(cons(["AA", "AA", "AA", "AG", "GG", "GG"], { rule: "majority" })).toBe("A-");
+  });
+
+  it("a 3/5 column at a 0.6 threshold reads as no-consensus (exact boundary)", () => {
+    // 3/5 == 0.6 exactly; strict '>' must reject it (fp would wrongly accept).
+    expect(cons(["A", "A", "A", "G", "G"], { rule: "majority", majorityThreshold: 0.6 })).toBe("-");
+    // 3/5 just over a 0.59 threshold → accepted.
+    expect(cons(["A", "A", "A", "G", "G"], { rule: "majority", majorityThreshold: 0.59 })).toBe(
+      "A",
+    );
+  });
+
+  it("threshold 0 ≡ plurality: always emits the top residue (smallest-byte tie)", () => {
+    expect(cons(["AG", "GA"], { rule: "majority", majorityThreshold: 0 })).toBe("AA"); // A,G tie → A
+  });
+});
+
+describe("consensusBytes — strict-iupac keeps the all-non-nucleotide '-' quirk", () => {
+  it("a column of only non-nucleotide residues → '-' under strict-iupac", () => {
+    // mask 0 with nonGap>0 → IUPAC[0] = '-' (deliberately kept; new rules fall back).
+    expect(cons(["*", "*"], { rule: "strict-iupac" })).toBe("-");
   });
 });
