@@ -1,0 +1,267 @@
+/* Consensus options modal (see ConsensusDialog.tsx). A fixed-inset backdrop with
+ * a centered card, reusing the chrome palette + the toolbar's segmented-toggle
+ * look so it reads as one app. Live-apply: no OK/Cancel, just Reset + Done. */
+
+.cons-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* above the context menu (100) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.cons-card {
+  min-width: 420px;
+  max-width: min(560px, 92vw);
+  background: #ffffff;
+  border: 1px solid #cdd2d6;
+  border-radius: 8px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28);
+  color: #2a2d30;
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+
+.cons-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e1e4e7;
+  background: #eef0f2;
+}
+
+.cons-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.cons-alpha {
+  padding: 1px 7px;
+  border: 1px solid #c2c7cc;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #6a7077;
+  font-size: 0.72rem;
+}
+
+.cons-x {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #6a7077;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cons-x:hover {
+  background: #dde1e4;
+  color: #2a2d30;
+}
+
+.cons-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+/* One option row: a fixed-width label + the control, baseline-aligned. */
+.cons-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cons-rowlabel {
+  flex: 0 0 138px;
+  color: #41464b;
+}
+
+/* A label whose control is disabled (irrelevant under the current rule) dims to
+ * read as inactive — the visual counterpart of the disabled segments. */
+.cons-rowlabel[data-off="true"] {
+  color: #a4abb1;
+}
+
+/* Segmented control — same construction as `.toolbar-toggle`. */
+.cons-seg {
+  display: inline-flex;
+  border: 1px solid #c2c7cc;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.cons-seg button {
+  padding: 3px 10px;
+  border: 0;
+  background: #ffffff;
+  color: #41464b;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cons-seg button + button {
+  border-left: 1px solid #c2c7cc;
+}
+
+.cons-seg button:hover:not(.seg-on):not(:disabled) {
+  background: #f3f5f7;
+}
+
+.cons-seg button.seg-on {
+  background: #396cd8;
+  color: #ffffff;
+}
+
+.cons-seg button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Majority threshold: the ">" prefix, a small number box, and the "%" suffix. */
+.cons-threshold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #41464b;
+}
+
+.cons-threshold input {
+  width: 54px;
+  padding: 2px 6px;
+  border: 1px solid #c2c7cc;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #2a2d30;
+  font: inherit;
+  text-align: right;
+}
+
+.cons-threshold input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cons-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid #e1e4e7;
+  background: #f6f7f8;
+}
+
+.cons-btn {
+  padding: 4px 14px;
+  border: 1px solid #c2c7cc;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #2a2e32;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cons-btn:hover:not(:disabled) {
+  background: #f3f5f7;
+  border-color: #a9afb5;
+}
+
+.cons-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cons-done {
+  background: #396cd8;
+  border-color: #396cd8;
+  color: #ffffff;
+}
+
+.cons-done:hover:not(:disabled) {
+  background: #2f5fc0;
+  border-color: #2f5fc0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cons-card {
+    background: #2a2d30;
+    border-color: #444;
+    color: #d6d9dc;
+  }
+  .cons-head {
+    background: #26292d;
+    border-bottom-color: #444;
+  }
+  .cons-alpha {
+    background: #31353a;
+    border-color: #4a4f55;
+    color: #9aa0a7;
+  }
+  .cons-x {
+    color: #9aa0a7;
+  }
+  .cons-x:hover {
+    background: #3a3f44;
+    color: #e3e6e9;
+  }
+  .cons-rowlabel {
+    color: #cfd3d7;
+  }
+  .cons-rowlabel[data-off="true"] {
+    color: #6b7177;
+  }
+  .cons-seg {
+    border-color: #4a4f55;
+  }
+  .cons-seg button {
+    background: #31353a;
+    color: #cfd3d7;
+  }
+  .cons-seg button + button {
+    border-left-color: #4a4f55;
+  }
+  .cons-seg button:hover:not(.seg-on):not(:disabled) {
+    background: #3a3f44;
+  }
+  .cons-seg button.seg-on {
+    background: #5b8def;
+    color: #11151a;
+  }
+  .cons-threshold {
+    color: #cfd3d7;
+  }
+  .cons-threshold input {
+    background: #31353a;
+    border-color: #4a4f55;
+    color: #e3e6e9;
+  }
+  .cons-foot {
+    background: #26292d;
+    border-top-color: #444;
+  }
+  .cons-btn {
+    background: #31353a;
+    border-color: #4a4f55;
+    color: #e3e6e9;
+  }
+  .cons-btn:hover:not(:disabled) {
+    background: #3a3f44;
+    border-color: #5b6168;
+  }
+  .cons-done {
+    background: #5b8def;
+    border-color: #5b8def;
+    color: #11151a;
+  }
+  .cons-done:hover:not(:disabled) {
+    background: #6f9bf2;
+    border-color: #6f9bf2;
+  }
+}

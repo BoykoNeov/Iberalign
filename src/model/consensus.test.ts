@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { AlignmentView } from "./view";
-import { columnConsensus, consensusBytes, type ConsensusConfig } from "./consensus";
+import {
+  columnConsensus,
+  consensusBytes,
+  consensusControlsEnabled,
+  type ConsensusConfig,
+} from "./consensus";
 import { columnProfiles } from "./profile";
 import type { AlphabetLabel } from "./types";
 
@@ -124,6 +129,7 @@ const STRICT: ConsensusConfig = {
   gap: "ignore",
   rule: "strict-iupac",
   sameTypeDisplay: "ry-code",
+  sameTypeMaxBases: 2,
   majorityThreshold: 0.5,
   noConsensus: "gap",
 };
@@ -185,11 +191,33 @@ describe("consensusBytes — same-type", () => {
     ).toBe("AT-");
   });
 
-  it("iupac-class: ≤2 distinct bases → their code; 3+ bases → fallback", () => {
+  it("iupac-class: ≤2 distinct bases → their code; 3+ bases → fallback (default cutoff 2)", () => {
     // col0 C/G → S (2 bases) ; col1 A/C/G → 3 bases → fallback '-'
     expect(cons(["CA", "GC", "GG"], { rule: "same-type", sameTypeDisplay: "iupac-class" })).toBe(
       "S-",
     );
+  });
+
+  it("iupac-class cutoff 3: a 3-base column → its B/D/H/V code; 4 bases still fall back", () => {
+    // col0 A/C/G → V (3 bases, admitted at cutoff 3) ; col1 A/C/G/T → 4 bases → '-'
+    expect(
+      cons(["AA", "CC", "GG", "AT"], {
+        rule: "same-type",
+        sameTypeDisplay: "iupac-class",
+        sameTypeMaxBases: 3,
+      }),
+    ).toBe("V-");
+  });
+
+  it("iupac-class cutoff is ignored under ry-code / majority-base display", () => {
+    // A/C/G is 3 distinct bases but not all one R/Y group → fallback regardless of cutoff.
+    expect(
+      cons(["A", "C", "G"], {
+        rule: "same-type",
+        sameTypeDisplay: "ry-code",
+        sameTypeMaxBases: 3,
+      }),
+    ).toBe("-");
   });
 
   it("non-nucleotide residues have no type → fallback", () => {
@@ -228,5 +256,53 @@ describe("consensusBytes — strict-iupac keeps the all-non-nucleotide '-' quirk
   it("a column of only non-nucleotide residues → '-' under strict-iupac", () => {
     // mask 0 with nonGap>0 → IUPAC[0] = '-' (deliberately kept; new rules fall back).
     expect(cons(["*", "*"], { rule: "strict-iupac" })).toBe("-");
+  });
+});
+
+describe("consensusControlsEnabled — dialog disabled-state map mirrors the pipeline", () => {
+  it("strict-iupac: only gap handling matters (fallback + sub-modes off)", () => {
+    expect(consensusControlsEnabled({ ...STRICT, rule: "strict-iupac" })).toEqual({
+      sameTypeDisplay: false,
+      sameTypeMaxBases: false,
+      majorityThreshold: false,
+      noConsensus: false, // strict always yields a code → no fallback
+    });
+  });
+
+  it("majority: threshold + fallback on, same-type sub-modes off", () => {
+    expect(consensusControlsEnabled({ ...STRICT, rule: "majority" })).toEqual({
+      sameTypeDisplay: false,
+      sameTypeMaxBases: false,
+      majorityThreshold: true,
+      noConsensus: true,
+    });
+  });
+
+  it("same-type: display on, fallback on, threshold off; maxBases gated on iupac-class", () => {
+    expect(
+      consensusControlsEnabled({ ...STRICT, rule: "same-type", sameTypeDisplay: "ry-code" }),
+    ).toEqual({
+      sameTypeDisplay: true,
+      sameTypeMaxBases: false, // only under iupac-class
+      majorityThreshold: false,
+      noConsensus: true,
+    });
+    expect(
+      consensusControlsEnabled({ ...STRICT, rule: "same-type", sameTypeDisplay: "iupac-class" }),
+    ).toEqual({
+      sameTypeDisplay: true,
+      sameTypeMaxBases: true,
+      majorityThreshold: false,
+      noConsensus: true,
+    });
+  });
+
+  it("all-identical: fallback on, every same-type/majority sub-control off", () => {
+    expect(consensusControlsEnabled({ ...STRICT, rule: "all-identical" })).toEqual({
+      sameTypeDisplay: false,
+      sameTypeMaxBases: false,
+      majorityThreshold: false,
+      noConsensus: true,
+    });
   });
 });

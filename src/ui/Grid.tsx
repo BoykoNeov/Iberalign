@@ -67,6 +67,8 @@ import {
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
 import { residueForKey } from "../model/typing";
 import type { PasteMode, CutMode, DeleteMode, TypeMode } from "./Toolbar";
+import ConsensusDialog from "./ConsensusDialog";
+import { defaultConfigFor, type ConsensusConfig } from "../model/consensus";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -193,6 +195,21 @@ export default function Grid({ view, onResized }: GridProps) {
   // above. The Insert key toggles it (the text-editor convention).
   const [typeMode, setTypeMode] = useState<TypeMode>("replace");
   const typeModeRef = useRef<TypeMode>("replace");
+  // Consensus options (Phase 3). `consensusConfig === null` means "follow the
+  // alphabet default" — the back-compat track behavior; a config is the user's
+  // dialog override, applied LIVE (an effect pushes it to the track renderer +
+  // marks the store dirty — no IPC, consensus is a derived view). `consensusOpen`
+  // gates the modal; its ref shadow lets the once-bound window keydown handler bail
+  // while the dialog is up (so arrows/Delete can't drive the grid behind it). The
+  // override resets to `null` when a load brings a different alphabet (see the
+  // `[view]` effect) so a protein file never inherits a DNA strict-IUPAC config.
+  const [consensusConfig, setConsensusConfig] = useState<ConsensusConfig | null>(null);
+  const [consensusOpen, setConsensusOpen] = useState(false);
+  const consensusOpenRef = useRef(false);
+  consensusOpenRef.current = consensusOpen;
+  const trackRendererRef = useRef<TrackLaneRenderer | null>(null);
+  // The alphabet of the currently-loaded view, to detect a cross-alphabet load.
+  const prevAlphabetRef = useRef<string | null>(null);
   // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
   // red, `info` (copied / inserted) is plain. The message PERSISTS — it does not
   // time out; it clears when the user takes their next action (see the effect below)
@@ -358,6 +375,13 @@ export default function Grid({ view, onResized }: GridProps) {
   const handleDeleteRows = useCallback(() => doDeleteRowsRef.current(), []);
   const handleDeleteColumns = useCallback(() => doDeleteColumnsRef.current(), []);
 
+  // Consensus dialog. The dialog reports its whole next config; we store it as the
+  // override (the live-apply effect pushes it to the track). Reset drops the
+  // override → the alphabet default. Open/close gate the modal.
+  const handleConsensusReset = useCallback(() => setConsensusConfig(null), []);
+  const openConsensus = useCallback(() => setConsensusOpen(true), []);
+  const closeConsensus = useCallback(() => setConsensusOpen(false), []);
+
   // Close the context menu on Escape (capture phase, so it beats the grid's
   // window keydown, which would otherwise also collapse the selection).
   useEffect(() => {
@@ -409,6 +433,10 @@ export default function Grid({ view, onResized }: GridProps) {
       () => store.getSelection(),
     );
     const scrollbars = new ScrollbarsLayer(vThumbRef.current!, hThumbRef.current!);
+    // Expose the track renderer so the consensus-config effect can push live
+    // config changes to it (the dialog is React state; this bridges to the
+    // imperative renderer, like `storeRef`). Nulled in cleanup below.
+    trackRendererRef.current = track;
     // Grid first, then chrome (ruler / names / track lane / minimap), then the
     // selection overlay, then the scrollbar thumbs — all updated in one dirty
     // frame, so they never lag the grid under pan/zoom. (Stacking is by z-index/DOM,
@@ -1142,6 +1170,9 @@ export default function Grid({ view, onResized }: GridProps) {
     const onKeyDown = (e: KeyboardEvent) => {
       const v = viewRef.current;
       if (!v) return;
+      // The consensus modal is up: let it own the keyboard (its Esc handler closes
+      // it). Bail so arrows/Delete/Ctrl+Z can't drive the grid behind the dialog.
+      if (consensusOpenRef.current) return;
       // Bound on `window` (not the grid cell) so Delete / Ctrl+Z / Ctrl+C / nav
       // fire even when focus sits on a toolbar/header button after a click — the
       // grid is the app's primary surface while a file is loaded. Bail when an
@@ -1457,6 +1488,7 @@ export default function Grid({ view, onResized }: GridProps) {
       selection.dispose();
       store.setSelectionListener(undefined);
       storeRef.current = null;
+      trackRendererRef.current = null;
     };
   }, []);
 
@@ -1475,7 +1507,25 @@ export default function Grid({ view, onResized }: GridProps) {
     setCopyMsg(null);
     // A delete menu from the previous alignment must not linger over the new one.
     setCtxMenu(null);
+    // Drop a consensus-config override on a CROSS-ALPHABET load (a protein file
+    // must not inherit a DNA strict-IUPAC override, and vice-versa) — back to the
+    // new alphabet's default. A same-alphabet reload keeps the user's choices.
+    // Guarded on a real change so the first load (prev === null) doesn't churn.
+    if (prevAlphabetRef.current !== null && prevAlphabetRef.current !== view.meta.alphabet) {
+      setConsensusConfig(null);
+    }
+    prevAlphabetRef.current = view.meta.alphabet;
   }, [view]);
+
+  // Live-apply the consensus config to the track renderer (no IPC — consensus is
+  // a derived view). `null` ⇒ the track follows the alphabet default. Runs on
+  // every config change AND once on mount (the track starts at its own `null`
+  // default, so this is a harmless no-op then). Marks the store dirty so the rAF
+  // loop repaints the lane with the new bytes.
+  useEffect(() => {
+    trackRendererRef.current?.setConfig(consensusConfig);
+    storeRef.current?.markDirty();
+  }, [consensusConfig]);
 
   // Zoom to an absolute cell size in CSS px (the status-bar slider). There is no
   // cursor for a slider drag, so anchor the zoom at the viewport CENTRE — the
@@ -1523,6 +1573,7 @@ export default function Grid({ view, onResized }: GridProps) {
         onCopy={doCopy}
         onPaste={handlePaste}
         onCut={handleCut}
+        onOpenConsensus={openConsensus}
         message={copyMsg}
       />
       <div className="grid-container" style={CHROME_VARS}>
@@ -1598,6 +1649,19 @@ export default function Grid({ view, onResized }: GridProps) {
             ))}
           </ul>
         </div>
+      )}
+      {/* Consensus options modal (Phase 3). Renders the EFFECTIVE config (the
+          override, or the alphabet default when none) so the controls always show
+          what's active; `isDefault` disables Reset when no override is set. */}
+      {consensusOpen && (
+        <ConsensusDialog
+          config={consensusConfig ?? defaultConfigFor(view.meta.alphabet)}
+          alphabet={String(view.meta.alphabet)}
+          isDefault={consensusConfig === null}
+          onChange={setConsensusConfig}
+          onReset={handleConsensusReset}
+          onClose={closeConsensus}
+        />
       )}
     </div>
   );

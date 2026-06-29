@@ -16,11 +16,10 @@
 //        all-identical → one distinct residue ⇒ that residue, else fallback.
 //        same-type     → ry-code   : all purine ⇒ `R` / all pyrimidine ⇒ `Y`
 //                        majority-base: same test, but show the top base
-//                        iupac-class: ≤2 distinct bases ⇒ their IUPAC code
-//                        (else fallback). NB the ≤2 cutoff is the defensible plain
-//                        reading of "same type" (S/W/K/M are 2-base codes) and is
-//                        Phase-3-dialog-confirmable — must cut below 4 or it would
-//                        be identical to strict-iupac.
+//                        iupac-class: ≤ `sameTypeMaxBases` distinct bases ⇒ their
+//                        IUPAC code (else fallback). The cutoff is user-chosen in
+//                        the Phase-3 dialog: 2 (S/W/K/M) or 3 (also B/D/H/V); it
+//                        must cut below 4 or it would be identical to strict-iupac.
 //        majority      → top residue exceeds the threshold (strict `>`) ⇒ top,
 //                        else fallback. Integer-exact (see THRESHOLD_SCALE).
 //   3'. Fallback (`noConsensus`): `-` or `*`, for the identical/same-type/majority
@@ -50,6 +49,11 @@ export type GapHandling = "ignore" | "gap-priority" | "star-if-gap";
 export type AgreementRule = "strict-iupac" | "all-identical" | "same-type" | "majority";
 export type SameTypeDisplay = "ry-code" | "majority-base" | "iupac-class";
 export type NoConsensus = "gap" | "star";
+/** Max distinct bases a column may hold and still count as one "type" under the
+ *  `same-type`/`iupac-class` display: `2` (two-base codes S/W/K/M) or `3` (also
+ *  the three-base codes B/D/H/V). Must stay below 4 or `iupac-class` would equal
+ *  strict-IUPAC. User-chosen in the Phase-3 dialog; default 2. */
+export type SameTypeMaxBases = 2 | 3;
 
 /** Consensus pipeline configuration. See the module comment for the ordering. */
 export interface ConsensusConfig {
@@ -59,12 +63,43 @@ export interface ConsensusConfig {
   rule: AgreementRule;
   /** Display sub-mode for `rule === "same-type"` (ignored otherwise). */
   sameTypeDisplay: SameTypeDisplay;
+  /** Distinct-base cutoff for `sameTypeDisplay === "iupac-class"` (ignored
+   *  otherwise): `2` keeps only two-base classes, `3` also admits B/D/H/V. */
+  sameTypeMaxBases: SameTypeMaxBases;
   /** Fraction in `[0, 1]`, strict-greater, for `rule === "majority"` (default
    *  0.5 = ">50%"). Compared integer-exactly at 0.1% granularity. */
   majorityThreshold: number;
   /** Step 3' fallback when a non-strict rule finds no consensus. Ignored under
    *  strict-iupac (which always yields a code). */
   noConsensus: NoConsensus;
+}
+
+/** Which optional sub-controls a config actually consults — the dialog disables
+ *  (not hides) the rest so an irrelevant toggle can't read as active. Mirrors the
+ *  pipeline exactly: a field is "enabled" iff `consensusBytes` reads it. */
+export interface ControlsEnabled {
+  /** `sameTypeDisplay` matters only under the same-type rule. */
+  sameTypeDisplay: boolean;
+  /** `sameTypeMaxBases` matters only for same-type + iupac-class display. */
+  sameTypeMaxBases: boolean;
+  /** `majorityThreshold` matters only under the majority rule. */
+  majorityThreshold: boolean;
+  /** `noConsensus` fallback applies to every rule EXCEPT strict-iupac (which
+   *  always yields a code). */
+  noConsensus: boolean;
+}
+
+/** The set of config sub-controls that the current `rule`/`display` actually
+ *  consult (see `ControlsEnabled`). Pure; the dialog drives its disabled states
+ *  from this so they can never drift from what the pipeline reads. */
+export function consensusControlsEnabled(config: ConsensusConfig): ControlsEnabled {
+  const sameType = config.rule === "same-type";
+  return {
+    sameTypeDisplay: sameType,
+    sameTypeMaxBases: sameType && config.sameTypeDisplay === "iupac-class",
+    majorityThreshold: config.rule === "majority",
+    noConsensus: config.rule !== "strict-iupac",
+  };
 }
 
 // Majority threshold granularity. The comparison is integer (`topCount * SCALE >
@@ -95,6 +130,7 @@ function sameType(
   topByte: number,
   rna: boolean,
   fallback: number,
+  maxBases: SameTypeMaxBases,
 ): number {
   if (mask === 0) return fallback;
   const purine = (mask & ~PURINE & 0x0f) === 0;
@@ -107,8 +143,9 @@ function sameType(
     case "majority-base":
       return purine || pyrimidine ? topByte : fallback;
     case "iupac-class":
-      // ≤2 distinct bases ⇒ a single 2-way (or conserved) IUPAC class.
-      return popcount4(mask) <= 2 ? decodeMask(mask, rna) : fallback;
+      // ≤ maxBases distinct bases ⇒ a single IUPAC class (its 2-/3-way code or a
+      // conserved base). `maxBases` is the user-confirmed cutoff (2 or 3).
+      return popcount4(mask) <= maxBases ? decodeMask(mask, rna) : fallback;
   }
 }
 
@@ -157,7 +194,14 @@ export function consensusBytes(
         out[c] = distinct[c] === 1 ? topByte[c] : fallback;
         break;
       case "same-type":
-        out[c] = sameType(config.sameTypeDisplay, mask, topByte[c], rna, fallback);
+        out[c] = sameType(
+          config.sameTypeDisplay,
+          mask,
+          topByte[c],
+          rna,
+          fallback,
+          config.sameTypeMaxBases,
+        );
         break;
       case "majority":
         out[c] = topCount[c] * THRESHOLD_SCALE > thr * nonGap[c] ? topByte[c] : fallback;
@@ -175,6 +219,7 @@ const STRICT_CONFIG: ConsensusConfig = {
   gap: "ignore",
   rule: "strict-iupac",
   sameTypeDisplay: "ry-code",
+  sameTypeMaxBases: 2,
   majorityThreshold: 0.5,
   noConsensus: "gap",
 };
@@ -182,6 +227,7 @@ const PLURALITY_CONFIG: ConsensusConfig = {
   gap: "ignore",
   rule: "majority",
   sameTypeDisplay: "ry-code",
+  sameTypeMaxBases: 2,
   majorityThreshold: 0,
   noConsensus: "gap",
 };

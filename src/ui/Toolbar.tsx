@@ -67,6 +67,8 @@ interface ToolbarProps {
   /** Cut the current selection to the clipboard (no-op upstream when nothing is
    *  selected) — copy then remove, in the cut mode. */
   onCut: () => void;
+  /** Open the consensus options modal (configures the consensus track). */
+  onOpenConsensus: () => void;
   /** Ephemeral feedback with a tone (`warn` ⇒ bold red, lingers), or `null`. */
   message: { text: string; tone: "info" | "warn" } | null;
 }
@@ -90,6 +92,7 @@ export default function Toolbar({
   onCopy,
   onPaste,
   onCut,
+  onOpenConsensus,
   message,
 }: ToolbarProps) {
   const hasSel = selInfo !== null;
@@ -287,6 +290,15 @@ export default function Toolbar({
           Insert
         </button>
       </span>
+
+      <button
+        type="button"
+        className="toolbar-btn"
+        onClick={onOpenConsensus}
+        title="Consensus options — configure how the consensus track is computed"
+      >
+        Consensus…
+      </button>
 
       {message && (
         <span

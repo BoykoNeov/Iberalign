@@ -24,7 +24,8 @@ import type { AlignmentView } from "../model/view";
 import { type Dims, type Viewport } from "../state/viewport";
 import { colToX, visibleCols } from "./viewport";
 import { lodFor } from "./lod";
-import { columnConsensus } from "../model/consensus";
+import { columnConsensus, consensusBytes, type ConsensusConfig } from "../model/consensus";
+import { columnProfiles } from "../model/profile";
 import { GlyphAtlas } from "./glyphs";
 import { type ColorScheme, defaultScheme } from "./colors";
 import { CHROME } from "./chrome";
@@ -42,6 +43,10 @@ export class TrackLaneRenderer {
   // Consensus bytes (length = view.width), memoized by view identity.
   private consView: AlignmentView | null = null;
   private cons: Uint8Array | null = null;
+  // The active consensus config. `null` = follow the alphabet default (the
+  // back-compat path via `columnConsensus`); a config = the user's Phase-3 dialog
+  // choices, applied live. Set by `setConfig`, which invalidates the byte cache.
+  private config: ConsensusConfig | null = null;
 
   constructor(canvas: HTMLCanvasElement, scheme: ColorScheme = defaultScheme()) {
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -68,6 +73,15 @@ export class TrackLaneRenderer {
   invalidate(): void {
     this.cons = null;
     this.consView = null;
+  }
+
+  /** Set the consensus config and drop the cached bytes so the next draw rederives
+   *  under it. `null` = follow the alphabet default. Live-apply: the caller marks
+   *  the store dirty after this and the rAF loop repaints — no IPC (consensus is a
+   *  derived view; Rust still owns the truth). */
+  setConfig(config: ConsensusConfig | null): void {
+    this.config = config;
+    this.invalidate();
   }
 
   draw(view: AlignmentView, vp: Viewport): void {
@@ -134,7 +148,12 @@ export class TrackLaneRenderer {
 
   private ensureConsensus(view: AlignmentView): Uint8Array {
     if (this.consView === view && this.cons) return this.cons;
-    this.cons = columnConsensus(view, 0, view.numRows - 1);
+    // `null` config → the alphabet default (back-compat); a config → the dialog's
+    // pipeline over a transient profile (profile caching is Phase 4 — same cost as
+    // a load, and the bytes are cached here by view identity regardless).
+    this.cons = this.config
+      ? consensusBytes(columnProfiles(view, 0, view.numRows - 1), this.config, view.meta.alphabet)
+      : columnConsensus(view, 0, view.numRows - 1);
     this.consView = view;
     return this.cons;
   }

@@ -100,17 +100,50 @@ starts. This file is the agreed design + decisions + phasing.
     byte-identical (advisor): protein plurality ≡ majority@0 incl. the `["W","A"]→A` tie;
     strict-iupac `mask==0 → '-'` quirk kept (new rules send `mask==0` → fallback).
 
-**Phases 3–5 below: not started.** (Profile CACHING is deferred to Phase 4, when the
-colorings share the profile; Phase 2's `columnConsensus` builds a transient profile per
+- **Phase 3 (consensus options dialog) — code complete + green (typecheck + 259 vitest
+  + build; +6 new tests). GUI smoke PASSED (2026-06-29, user "all good"); committed.** A real modal
+  (`src/ui/ConsensusDialog.tsx` + `.css`, reusing the `ctx-backdrop` pattern: fixed-inset
+  backdrop + centered card, Esc / click-outside / × to close) that edits the full
+  `ConsensusConfig` pipeline and applies it **LIVE — no IPC, no OK/Cancel** (consensus is a
+  derived view; Rust still owns the truth). Controls: Gap handling · Agreement rule ·
+  Same-type display · **IUPAC-class cutoff (the resolved open question — now a user toggle,
+  see below)** · Majority threshold (a `>N%` number input, stores the fraction) ·
+  No-consensus fallback · "Reset to default" · "Done". Irrelevant sub-controls are
+  **DISABLED, not hidden** (hiding reflows the card) per a new pure
+  `consensusControlsEnabled(config)` in `consensus.ts` that mirrors EXACTLY which fields the
+  engine reads (tested). **Wiring (advisor-confirmed):** the track renderer's config is
+  **nullable** — `null` = follow the alphabet default (keeps `columnConsensus` alive, not
+  dead-in-prod; the untouched case auto-tracks the alphabet per load). `Grid` holds
+  `consensusConfig: ConsensusConfig | null` (override) + `consensusOpen`; a
+  `useEffect([consensusConfig])` pushes it to `trackRendererRef.current.setConfig(cfg)` +
+  `store.markDirty()`. The override **resets to `null` on a CROSS-ALPHABET load** (a protein
+  file must not inherit a DNA strict-IUPAC override) via a `prevAlphabetRef` compare in the
+  `[view]` effect; a same-alphabet reload keeps the user's choices. The dialog renders the
+  **effective** config (`consensusConfig ?? defaultConfigFor(alphabet)`) so the controls
+  always show what's active; `isDefault` disables Reset. A `consensusOpenRef` guard bails the
+  grid's window keydown while the modal is up (arrows/Delete can't drive the grid behind it).
+  Entry point is a throwaway **toolbar "Consensus…" button** (Phase 5 rebuilds the toolbar as
+  the menu bar). **RESOLVED open question — IUPAC-class cutoff is now USER-CONFIGURABLE** (the
+  user chose "add both options" 2026-06-29): new `ConsensusConfig.sameTypeMaxBases: 2 | 3`
+  (default 2 = back-compat), threaded into the one `sameType` branch; the dialog exposes
+  `≤2 bases` / `≤3 bases`, enabled only under same-type + iupac-class. This is the one small
+  engine touch in Phase 3 (the plan flagged this exact branch as confirmable here) — NOT
+  coloring/cache scope creep.
+
+**Phases 4–5 below: not started.** (Profile CACHING is deferred to Phase 4, when the
+colorings share the profile; Phases 2–3's consensus path builds a transient profile per
 call — same cost as before, the track's by-view-identity byte cache untouched.)
 
 ## Open questions (surface in the Phase-3 dialog)
 
-- **`same-type / iupac-class` cutoff is ≤2 distinct bases.** Advisor-greenlit as the
-  defensible plain reading ("same type" with S/W/K/M = 2-base codes; it MUST cut below 4
-  or it is literally strict-iupac), but it is the one rule whose semantics the user hasn't
-  explicitly confirmed. The Phase-3 dialog should surface/confirm it (one branch in
-  `sameType()`, trivially flippable to include the 3-base codes B/D/H/V).
+- **`same-type / iupac-class` cutoff — RESOLVED 2026-06-29: now USER-CONFIGURABLE.** Asked
+  the user (≤2 vs ≤3); they chose "add both options", so the cutoff became a dialog control
+  rather than a fixed value. New `ConsensusConfig.sameTypeMaxBases: 2 | 3` (default 2 =
+  back-compat), wired into the one `sameType` branch; the dialog's "IUPAC class cutoff"
+  toggle (`≤2 bases` / `≤3 bases`) is enabled only under same-type + iupac-class. The
+  original advisor-greenlit ≤2 (S/W/K/M two-base codes) stays the default; ≤3 also admits
+  B/D/H/V; only an all-four-base column ever falls back. (Must stay below 4 or iupac-class
+  would equal strict-IUPAC.)
 - **`majority-base` / `iupac-class` can echo an ambiguity code straight from the data.**
   If the source contains a literal `R`/`N`/`*`, the top residue or class can be that code
   — a known limitation of deriving consensus from possibly-malformed input, not a bug. No
