@@ -43,17 +43,39 @@ reversible replace of exactly 2 selected rows; 3+ → "requires MAFFT" (M6 next)
 - [x] cargo test workspace + clippy + fmt + typecheck green (33 iberalign tests)
 - [ ] frontend resync after the edit (buffer → `resizeContents`); undo/redo round-trips — Phase D wiring
 
-## Phase D — UI (`src/ui`; needs GUI smoke)
-- [ ] "Align selected" MenuBar entry; enabled iff exactly 2 distinct rows selected;
-      else disabled with reason ("select 2 sequences" / "3+ requires MAFFT")
-- [ ] mode Global (default)/Local; matrix auto by alphabet (protein BLOSUM62); sensible
-      gap defaults — click-through MVP, options affordance can follow
-- [ ] run → resync buffer → show `score · %id · length` in the status bar; `Ctrl/⌘+Z` restores
-- [ ] typecheck + vitest + build green
-- [ ] **GUI smoke**: select 2 rows → Align (global + local) → rows replaced, readout shows;
-      undo restores; 3+ selection disables with the MAFFT note; protein vs DNA pick the right
-      default matrix
-- [ ] advisor review + commit + push + update memory/CLAUDE.md after smoke
+## Phase D — UI (`src/ui`; GLOBAL-only; code complete + green; GUI smoke DEFERRED)
+
+**Global-only decision (2026-06-29, user):** in-place Local is lossy (trims rows
+to the matched region) → the Local/Method option was **removed** from "Align
+selected". The engine + CLI keep Local for a future non-destructive view.
+
+- [x] New "Align" MenuBar menu: single "Align selected sequences" action (disabled when
+      <2 rows selected). **No Method submenu** — Global only (`AlignMethod` type removed)
+- [x] `Grid` wiring: `doAlign` (effect-scoped) reads the selection — 2 rows ⇒
+      `pairwiseAlign(r0, r1, "global")`, <2 ⇒ "Select 2 sequences", 3+ ⇒ "needs MAFFT";
+      `doAlignRef` bridge + `handleAlign`; `canAlign = selInfo.rows >= 2` gates the item.
+      (`alignMode` state/ref + `handleSetAlignMode` removed with the submenu)
+- [x] matrix/gaps auto by alphabet (command-side default; no UI override in the MVP)
+- [x] reuse `runEdit` (op returns `getRenderBuffer`, score captured in a closure) → in-place
+      resize; readout `score · %id · length` in the message area; undo/redo ride `undoEdit`/`redoEdit`
+- [x] empty-edge guard: two all-gap rows ⇒ length 0 ⇒ command skips the edit, UI says
+      "Nothing to align (both sequences are empty)"
+- [x] typecheck + 295 vitest + build green
+- [ ] **GUI smoke (carry-over, future session)**: select 2 rows → Align → the two rows
+      are replaced by the aligned pair, readout shows score/%id/length; `Ctrl/⌘+Z`
+      restores; a 3+ selection shows the MAFFT note; <2 disables the item; protein vs DNA
+      pick the right default matrix; re-align an already-aligned pair (residue resync);
+      width-shrink case (2-row alignment narrower than before)
+- [ ] (smoke already had advisor review; commit/push of D is this session's wrap-up)
+
+## Deferred to a future session (design open — user, 2026-06-29)
+- [ ] **Block / sub-area align**: when only part of some sequences is selected and gaps must
+      be inserted — **Variant 1** grow past the selection borders vs **Variant 2** align
+      within the allocated space (no gap insertion). **User leans Variant 2; maybe
+      user-choosable.** Today `doAlign` ignores the column extent and aligns whole rows.
+- [ ] **Arbitrary N≥2 / non-adjacent**: selection is one rectangle (contiguous rows only);
+      multi-select + N>2 (→ MAFFT, M6) are future.
+- [ ] **Local as a non-destructive view/report** (the engine already supports it).
 
 ## Notes
 - Align the **ungapped** residues, not the gapped rows.

@@ -9,6 +9,42 @@ batch); a 3+ selection disables the action with a "requires MAFFT" note.
 Spec: §5 "Pairwise alignment", §12 "M3". Decisions below were taken with the
 advisor and confirmed by the user (2026-06-29).
 
+## Session-end status (2026-06-29)
+
+- **Phases A–C committed** (`85b2252` engine + CLI, `b5d5305` IPC command +
+  wrapper) — CI-green, no smoke needed.
+- **Phase D (UI) is GLOBAL-ONLY and code-complete + green** (typecheck / 295
+  vitest / build), but its **GUI smoke is deferred to a future session** along
+  with the broader feature below. The Local (Smith–Waterman) option was **removed
+  from the in-place "Align selected"** at the user's request: in-place Local is
+  *lossy* (it trims each row to the matched region, discarding residues), and the
+  user does not want a lossy in-place edit. **The engine + CLI keep Local** — it
+  returns later as a **non-destructive view / report**, never as an in-place edit.
+- **Current Phase-D behavior** = "select two rows (any columns), align the two
+  **whole ungapped sequences** Global, replace both rows in place, reversibly."
+  The column extent of the selection is **ignored** (it aligns whole sequences,
+  not the selected sub-block). Adjacent-only (one selection rectangle ⇒ the rows
+  are contiguous). This is complete and useful as-is; the refinements below are
+  future work.
+
+## Deferred to a future session (design open)
+
+The user wants, eventually, to **align any two-or-more sequences and any selected
+area** (not just two whole adjacent rows). Two threads:
+
+1. **Block / sub-area align** — when only *part* of some sequences is selected
+   (a column range, not the whole row) and the alignment needs to insert gaps,
+   what happens at the selection borders? Two variants:
+   - **Variant 1 — grow past the borders:** insert gaps / columns as needed and
+     let the result extend beyond the originally selected region.
+   - **Variant 2 — align within the allocated space** only: no gap insertion past
+     the selection; the result stays inside the selected columns.
+   **User leans Variant 2**, but it "maybe should be choosable by the user." Both
+   are decisions for the future session — not built now.
+2. **Arbitrary N≥2 / non-adjacent selection** — today selection is one rectangle,
+   so only contiguous rows pair. Multi-select (non-adjacent pairs) and N>2 (true
+   MSA → MAFFT, M6) are future. The `align-core` engine is pairwise-only by design.
+
 ## Locked decisions
 
 1. **Hand-rolled Gotoh DP**, not a `rust-bio` wrap. CLAUDE.md states pairwise
@@ -90,18 +126,21 @@ The headless CI path.
   -changing paste/undo already do.
 - Register in `lib.rs`; `ipc` wrapper + camelCase TS types (`fromWire`).
 
-## UI (`src/ui`) — needs GUI smoke
-- "Align selected" entry in the MenuBar (an **Align** menu, or under Edit):
-  enabled only when **exactly two distinct rows** are selected; otherwise
-  disabled with a reason ("select 2 sequences" / "3+ requires MAFFT").
-- MVP options: mode Global (default) / Local; matrix auto by alphabet (protein
-  BLOSUM62 default). A small options affordance can follow; defaults click-through
-  first.
-- On run: call the command, resync the buffer, show `score · %id · length` in the
-  status bar; `Ctrl/⌘+Z` restores (one edit).
+## UI (`src/ui`) — needs GUI smoke (DEFERRED to a future session)
+- "Align selected" entry in the MenuBar (the **Align** menu): enabled only when
+  **at least two rows** are selected; the handler reports the exact case
+  (<2 ⇒ "select 2 sequences", 3+ ⇒ "needs MAFFT").
+- **GLOBAL only** — no mode submenu. Local was removed (lossy in-place; see the
+  status block). Matrix auto by alphabet (protein BLOSUM62, DNA/RNA match/mismatch
+  2/−1) — command-side default, no UI override in the MVP.
+- On run: call the command, resync the buffer (via `runEdit` → `getRenderBuffer`),
+  show `score · %id · length` in the status bar; `Ctrl/⌘+Z` restores (one edit).
 
 ## Phasing
-- **A** engine (matrix + Gotoh + tests) — CI-green, no smoke.
-- **B** CLI — CI-green.
+- **A** engine (matrix + Gotoh + tests) — CI-green, no smoke. ✅ committed `85b2252`.
+- **B** CLI — CI-green. ✅ committed `85b2252`.
 - **C** IPC command + reversible edit + frontend wrapper — typecheck/build green.
-- **D** UI action + status readout — GUI smoke, then commit + push + docs/memory.
+  ✅ committed `b5d5305`.
+- **D** UI action + status readout (GLOBAL-only) — code-complete + green; **GUI
+  smoke DEFERRED to a future session** (carry-over), together with the block/sub-
+  area + N≥2 design above.

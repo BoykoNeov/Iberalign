@@ -410,6 +410,33 @@ dependency-light and surface toolchain/linker issues fast.
   questions (menu bar; same-type exposes all 3 displays; track+grid coloring both; majority
   default strict >50%).
   </details>
+- **M3 pairwise alignment — engine + CLI + IPC COMMITTED; UI code-complete (GLOBAL-ONLY)
+  but UNCOMMITTED, pending GUI smoke (deferred to a future session).** Hand-rolled Gotoh
+  affine NW/SW in `align-core` (`align.rs` `pairwise(a,b,&matrix,mode,scoring)` — 3-state
+  M/X/Y DP, `NEG=-1e9` sentinel, deterministic tie M>X>Y, %-identity = identical-non-gap-
+  cols / length) + `matrix.rs` `SubstitutionMatrix` (BLOSUM62/45/80 + PAM250 + match/
+  mismatch; symmetry + reference-cell validation tests; `by_name`/`default_for`).
+  **Committed:** Phase A engine + Phase B CLI (`align <a> <b> [--mode --matrix --gap-open
+  --gap-extend]`) = `85b2252`; Phase C `pairwise_align(row_a,row_b,mode,matrix?,gap_open?,
+  gap_extend?)` command (reads UNGAPPED residues, applies a reversible `SpliceRows` via
+  `realign_splice` — replace the 2 rows padded to `target=max(W,aligned)` or `W` when only
+  2 rows, widen others; returns `{score,percent_identity,length}` DTO) + `ipc/edit.ts::
+  pairwiseAlign` wrapper = `b5d5305`. **Phase D (UI) is GLOBAL-ONLY + code-complete + green
+  (typecheck / 295 vitest / build) but sits UNCOMMITTED in the working tree** (`Grid.tsx` +
+  `MenuBar.tsx` + the `commands.rs` empty-result guard, kept together so D lands atomically
+  after smoke). **User-decided 2026-06-29:** (1) **NO lossy in-place edit ⇒ GLOBAL only** —
+  the Local (SW) option was REMOVED from "Align selected" (in-place Local trims rows to the
+  matched region, discarding residues); the engine + CLI KEEP Local for a future
+  non-destructive view/report. (2) **Adjacent-only** for now (selection is one rectangle ⇒
+  contiguous rows). The Align menu = a single "Align selected sequences" action (disabled
+  <2 rows; <2 ⇒ "select 2", 3+ ⇒ "needs MAFFT"); `doAlign` aligns the two WHOLE ungapped
+  rows Global and IGNORES the selection's column extent. **DEFERRED to a future session
+  (design open):** block/sub-area align — when only part of sequences is selected and gaps
+  must be inserted, **Variant 1** (grow past the selection borders) vs **Variant 2** (align
+  within the allocated space, no gap insertion); **user leans Variant 2, maybe choosable**.
+  Also future: arbitrary N≥2 / non-adjacent (multi-select; N>2 → MAFFT M6) + Local as a
+  read-only view. MAFFT (M6) remains the agreed next batch. Detail in
+  `docs/plans/m3-{plan,context,tasks}.md`.
 
 ## Dev-docs
 
