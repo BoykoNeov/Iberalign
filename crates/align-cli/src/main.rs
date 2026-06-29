@@ -30,6 +30,7 @@ fn main() -> ExitCode {
             }
         },
         Some("generate") => generate(&args[1..]),
+        Some("align") => align_cmd(&args[1..]),
         Some(other) => {
             eprintln!("error: unknown subcommand '{other}'");
             usage();
@@ -92,6 +93,154 @@ fn composition(bytes: &[u8]) -> ExitCode {
             eprintln!("parse error: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `align <a.fasta> <b.fasta> [--mode global|local] [--matrix NAME]
+///        [--gap-open N] [--gap-extend N]`
+///
+/// Aligns the **first** sequence of each file (their ungapped residues) and
+/// prints the aligned pair, score, %-identity, and length. Matrix and gap
+/// penalties default to the inferred alphabet when not given. The headless
+/// exercise of the M3 engine.
+fn align_cmd(args: &[String]) -> ExitCode {
+    let mut files: Vec<&str> = Vec::new();
+    let mut mode = align_core::AlignMode::Global;
+    let mut matrix_name: Option<String> = None;
+    let mut gap_open: Option<i32> = None;
+    let mut gap_extend: Option<i32> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--mode" => {
+                match args.get(i + 1).map(String::as_str) {
+                    Some("global") => mode = align_core::AlignMode::Global,
+                    Some("local") => mode = align_core::AlignMode::Local,
+                    _ => {
+                        eprintln!("error: --mode expects 'global' or 'local'");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
+            }
+            "--matrix" => match args.get(i + 1) {
+                Some(n) => {
+                    matrix_name = Some(n.clone());
+                    i += 2;
+                }
+                None => {
+                    eprintln!("error: --matrix expects a name");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--gap-open" => match args.get(i + 1).map(|s| s.parse::<i32>()) {
+                Some(Ok(v)) => {
+                    gap_open = Some(v);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("error: --gap-open expects an integer");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--gap-extend" => match args.get(i + 1).map(|s| s.parse::<i32>()) {
+                Some(Ok(v)) => {
+                    gap_extend = Some(v);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("error: --gap-extend expects an integer");
+                    return ExitCode::FAILURE;
+                }
+            },
+            s if s.starts_with("--") => {
+                eprintln!("error: unknown flag '{s}'");
+                return ExitCode::FAILURE;
+            }
+            s => {
+                files.push(s);
+                i += 1;
+            }
+        }
+    }
+
+    if files.len() != 2 {
+        eprintln!(
+            "usage: iberalign-cli align <a.fasta> <b.fasta> [--mode global|local] \
+             [--matrix blosum62|blosum45|blosum80|pam250|dna] [--gap-open N] [--gap-extend N]"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let a = match first_sequence(files[0]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let b = match first_sequence(files[1]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let alphabet = align_core::Alphabet::infer(&a).widen(align_core::Alphabet::infer(&b));
+    let matrix = match &matrix_name {
+        Some(n) => match matrix_by_name(n) {
+            Some(m) => m,
+            None => {
+                eprintln!(
+                    "error: unknown matrix '{n}' (try blosum62|blosum45|blosum80|pam250|dna)"
+                );
+                return ExitCode::FAILURE;
+            }
+        },
+        None => align_core::SubstitutionMatrix::default_for(alphabet),
+    };
+    let defaults = align_core::Scoring::default_for(alphabet);
+    let scoring = align_core::Scoring {
+        gap_open: gap_open.unwrap_or(defaults.gap_open),
+        gap_extend: gap_extend.unwrap_or(defaults.gap_extend),
+    };
+
+    let r = align_core::pairwise(&a, &b, &matrix, mode, scoring);
+    let mode_label = match mode {
+        align_core::AlignMode::Global => "global",
+        align_core::AlignMode::Local => "local",
+    };
+    println!("mode     : {mode_label}");
+    println!("alphabet : {}", alphabet.label());
+    println!("a: {}", String::from_utf8_lossy(&r.aligned_a));
+    println!("b: {}", String::from_utf8_lossy(&r.aligned_b));
+    println!("score    : {}", r.score);
+    println!("identity : {:.1}% ({} cols)", r.percent_identity, r.length);
+    ExitCode::SUCCESS
+}
+
+/// Read a FASTA file and return the first sequence's ungapped residues.
+fn first_sequence(path: &str) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let out = align_core::parse_fasta(&bytes).map_err(|e| format!("parse '{path}': {e}"))?;
+    let ds = align_core::Dataset::from_records(&out.records);
+    match ds.sequences.first() {
+        Some(seq) => Ok(seq.residues.clone()),
+        None => Err(format!("'{path}' has no sequences")),
+    }
+}
+
+/// Map a `--matrix` name to a [`align_core::SubstitutionMatrix`].
+fn matrix_by_name(name: &str) -> Option<align_core::SubstitutionMatrix> {
+    match name.to_ascii_lowercase().as_str() {
+        "blosum62" => Some(align_core::SubstitutionMatrix::blosum62()),
+        "blosum45" => Some(align_core::SubstitutionMatrix::blosum45()),
+        "blosum80" => Some(align_core::SubstitutionMatrix::blosum80()),
+        "pam250" => Some(align_core::SubstitutionMatrix::pam250()),
+        "dna" | "match" | "nt" => Some(align_core::SubstitutionMatrix::match_mismatch(2, -1)),
+        _ => None,
     }
 }
 
@@ -217,6 +366,8 @@ fn usage() {
     eprintln!("  iberalign-cli summary     <file.fasta | ->");
     eprintln!("  iberalign-cli composition <file.fasta | ->");
     eprintln!("  iberalign-cli generate    <rows> <cols> <out.fasta> [gap_pct]");
+    eprintln!("  iberalign-cli align       <a.fasta> <b.fasta> [--mode global|local]");
+    eprintln!("                            [--matrix NAME] [--gap-open N] [--gap-extend N]");
 }
 
 #[cfg(test)]
@@ -262,5 +413,14 @@ mod tests {
             !buf.contains(&b'-'),
             "gap_pct=0 must produce no '-' residues"
         );
+    }
+
+    #[test]
+    fn matrix_names_resolve_case_insensitively() {
+        assert!(matrix_by_name("BLOSUM62").is_some());
+        assert!(matrix_by_name("pam250").is_some());
+        assert!(matrix_by_name("dna").is_some());
+        assert!(matrix_by_name("nt").is_some());
+        assert!(matrix_by_name("nonsense").is_none());
     }
 }
