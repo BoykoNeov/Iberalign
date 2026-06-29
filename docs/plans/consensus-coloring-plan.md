@@ -210,7 +210,39 @@ starts. This file is the agreed design + decisions + phasing.
     edit (type/paste/delete) updates the coloring (shared-cache invalidation). Density tier
     (zoom way out) unaffected; trailing-gap grey tail still shows.
 
-**Phase 5 below: not started.**
+- **Phase 5 (shell — toolbar → menu bar) — code complete + green (typecheck + 295 vitest +
+  build); GUI smoke PENDING, NOT committed (smoke-first for UI).** The flat `Toolbar` is
+  replaced by a real menu bar (`ui/MenuBar.tsx` + `.css`; `Toolbar.tsx`/`.css` deleted, the
+  mode types moved into `MenuBar`). **Mechanism (advisor-steered):** click-to-open dropdowns
+  with click-to-open `▸` flyout SUBMENUS for the mode groups (NOT flattened sections — the
+  advisor flagged that flattening 5 actions + 6 mode groups = ~20 rows, exactly what submenus
+  prevent; click-to-open, not hover, so no hover-gap/edge-flip fragility). The collapsed
+  submenu row shows the CURRENT value (glance-state without opening). Close on outside-mousedown
+  (a `barRef.contains` check, NOT an overlay backdrop — so the bar buttons stay directly
+  clickable and switch menus in one click) or Esc; dropdowns are `position:fixed` at the
+  button's measured rect so they escape the strip's `overflow:hidden` (which the message needs).
+  **Menus:** `Edit` = Copy/Cut/Paste/Delete-sequences/Delete-columns + 6 mode submenus (copy
+  format · paste mode · insert shift · cut mode · delete key · typing); `View` = Color scheme ·
+  Grid coloring · Track coloring + a Show-consensus-track toggle (**user chose "Both" for the
+  View menu's content — the advisor flagged View as the spec's one unfilled gap**); `Consensus`
+  = Options… (the existing dialog). **New wiring beyond the old toolbar's:** (a) a **color-scheme
+  picker** (Vivid/Classic/Colorblind — the `render/colors.ts` registry was unreachable from any
+  UI before this) → `TrackLaneRenderer.setColorScheme` (new; mirrors `Canvas2DRenderer`'s) +
+  the grid + the minimap (its `setColorScheme` already rebuilds the aggregate), via a
+  `[schemeId]` effect; (b) **show/hide the consensus lane** → new `TrackLaneRenderer.setVisible`
+  (early-returns in `draw`) + a `--track-h: 0` CSS collapse + `.hidden` on the track elements,
+  via a `[trackVisible]` effect (the grid reclaims the freed height through its ResizeObserver).
+  The Grid + Track coloring quick-picks patch the SAME `coloringConfig` the dialog edits (the
+  menu is a fast path, kept in sync). **Polish (advisor):** platform-aware accelerators
+  (`Ctrl`/`⌘`); the strip keeps the selection readout + a compact DESTRUCTIVE-MODE glance-state
+  (paste/cut/del — so the next Cut/Paste/Delete's behavior reads without opening a menu) + the
+  ephemeral message. **Keydown guard (advisor):** while a dropdown is open it can cover the grid,
+  so MenuBar reports open/closed via `onOpenChange` → a `menuOpenRef` in `Grid` bails the window
+  keydown (mirrors `consensusOpenRef`) so Delete/arrows can't mutate/move the selection behind the
+  panel; Esc is handled inside MenuBar. **GUI smoke checklist:** menus open/switch/close (click button / outside /
+  Esc); flyouts pick radios + the collapsed row shows the choice; disabled Insert-shift submenu
+  under Overwrite; scheme picker recolors grid+track+minimap; Show-consensus-track collapses +
+  restores the lane and the grid resizes; every Edit action/mode matches the old toolbar.
 
 ## Open questions (surface in the Phase-3 dialog)
 

@@ -56,6 +56,10 @@ export class TrackLaneRenderer {
   // default `full` track mode colors every cell — byte-identical to the old path.
   private columnData: ColumnData | null;
   private coloring: ColoringConfig = DEFAULT_COLORING;
+  // Show/hide gate (the View menu's "Show consensus track"). When hidden the lane
+  // collapses to 0 height in CSS (`--track-h: 0`) and `draw` early-returns so no
+  // paint work is wasted on the off-screen canvas. Default visible.
+  private visible = true;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -76,6 +80,20 @@ export class TrackLaneRenderer {
    *  config identity), so nothing local needs invalidating. */
   setColoring(coloring: ColoringConfig): void {
     this.coloring = coloring;
+  }
+
+  /** Switch the residue color scheme (the View menu's scheme picker). Mirrors
+   *  `Canvas2DRenderer.setColorScheme`: the fill is rederived each draw, and the
+   *  glyph atlas re-inks lazily on the next letter-tier draw (its `matches` check
+   *  sees the new scheme id). Live-apply: `Grid` marks the store dirty after this. */
+  setColorScheme(scheme: ColorScheme): void {
+    this.scheme = scheme;
+  }
+
+  /** Show or hide the consensus lane. Hidden ⇒ `draw` paints nothing (the row also
+   *  collapses to 0 height in CSS). Live-apply: `Grid` marks the store dirty. */
+  setVisible(visible: boolean): void {
+    this.visible = visible;
   }
 
   resize(cssW: number, cssH: number, dpr: number = globalThis.devicePixelRatio || 1): void {
@@ -107,6 +125,7 @@ export class TrackLaneRenderer {
   }
 
   draw(view: AlignmentView, vp: Viewport): void {
+    if (!this.visible) return; // hidden lane: collapsed in CSS, skip the paint
     const { ctx, dpr } = this;
     const cw = this.canvas.width;
     const ch = this.canvas.height;

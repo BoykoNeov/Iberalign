@@ -24,6 +24,9 @@
   overflow: hidden;
 }
 
+/* The header doubles as the drag handle (see ConsensusDialog.tsx — pointer-capture
+ * drag translates the card). `cursor: move` advertises it; `user-select: none` keeps
+ * a fast drag from selecting the title text. The × button re-asserts its own cursor. */
 .cons-head {
   display: flex;
   align-items: center;
@@ -31,6 +34,8 @@
   padding: 10px 14px;
   border-bottom: 1px solid #e1e4e7;
   background: #eef0f2;
+  cursor: move;
+  user-select: none;
 }
 
 .cons-title {
@@ -102,6 +107,22 @@
  * read as inactive — the visual counterpart of the disabled segments. */
 .cons-rowlabel[data-off="true"] {
   color: #a4abb1;
+}
+
+/* Inline help glyph in a row label (the ⓘ). Muted by default, brightens on hover/
+ * focus; the native `title` carries the explanation. `cursor: help` signals it's
+ * informational, not actionable. */
+.cons-help {
+  margin-left: 5px;
+  color: #9aa0a6;
+  font-size: 0.85em;
+  cursor: help;
+}
+
+.cons-help:hover,
+.cons-help:focus-visible {
+  color: #396cd8;
+  outline: none;
 }
 
 /* Segmented control — same construction as `.toolbar-toggle`. */
@@ -234,6 +255,13 @@
   }
   .cons-rowlabel[data-off="true"] {
     color: #6b7177;
+  }
+  .cons-help {
+    color: #7d838a;
+  }
+  .cons-help:hover,
+  .cons-help:focus-visible {
+    color: #6f9bf2;
   }
   .cons-seg {
     border-color: #4a4f55;

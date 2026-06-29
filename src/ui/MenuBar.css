@@ -1,0 +1,282 @@
+/* Grid menu bar (see MenuBar.tsx) — the Edit/View/Consensus strip pinned at the top
+ * of the grid shell, above the grid container. Replaces the old flat toolbar. Mirrors
+ * the status bar's chrome palette so the shell reads as one piece. flex:0 0 auto so it
+ * takes only its own height and the grid container keeps the slack. overflow:hidden
+ * clips the right-side message; the dropdowns are position:fixed, so they escape the
+ * clip (they're anchored to the menu button's measured rect). */
+.grid-menubar {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  height: 30px;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid #cdd2d6;
+  background: #eef0f2;
+  color: #33373b;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.menubar-menus {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+/* Top-level menu button (Edit / View / Consensus). Borderless chip; hover and the
+ * open state fill subtly so the active menu reads. */
+.menubar-btn {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #2a2e32;
+  font: inherit;
+  cursor: pointer;
+}
+
+.menubar-btn:hover {
+  background: #e1e4e8;
+}
+
+.menubar-btn.open {
+  background: #d9dde2;
+}
+
+/* Right side. The selection readout takes the first slot after the menus and pushes
+ * itself + everything after to the right with margin-left:auto. */
+.menubar-sel {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.menubar-dim {
+  color: #7a8087;
+}
+
+.menubar-muted {
+  color: #7a8087;
+  font-style: italic;
+}
+
+/* Destructive-mode glance-state (paste / cut / delete). Read-only; can shrink before
+ * the message does so it never pushes the message off-strip. */
+.menubar-modes {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #565b61;
+}
+
+.menubar-dot {
+  color: #aab0b6;
+  margin: 0 0.35rem;
+}
+
+/* Ephemeral feedback, pinned right. `warn` (failure / dropped / truncated) is bold
+ * red; the default `info` tone is quiet. Shrinks + ellipsises within its own box. */
+.menubar-msg {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #4a4f55;
+}
+
+.menubar-msg.warn {
+  color: #c92a2a;
+  font-weight: 700;
+}
+
+/* Dropdown + submenu flyout — both float over the grid (the strip clips, these
+ * don't). Reuse the right-click menu's look: white card, soft border, drop shadow. */
+.menubar-dropdown,
+.menubar-flyout {
+  position: fixed;
+  z-index: 101;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 210px;
+  background: #ffffff;
+  border: 1px solid #cdd2d6;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 0.82rem;
+}
+
+/* The Edit dropdown is tall (actions + six mode groups); cap it to the viewport and
+ * scroll if a short window can't fit it. The flyout is a separate fixed node (not a
+ * child of this), so its options are never clipped by this scroll box. */
+.menubar-dropdown {
+  max-height: calc(100vh - 70px);
+  overflow-y: auto;
+}
+
+.menubar-flyout {
+  z-index: 102;
+  min-width: 150px;
+}
+
+.menubar-dropdown li,
+.menubar-flyout li {
+  margin: 0;
+}
+
+/* A menu row (action / toggle / submenu parent / radio option). A flex row so the
+ * label, the right-aligned accelerator / current-value / arrow, and the left check
+ * marker line up. */
+.menubar-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 0.4rem;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #2a2d30;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menubar-item:hover:not(:disabled),
+.menubar-item:focus-visible,
+.menubar-item.open {
+  background: #396cd8;
+  color: #ffffff;
+  outline: none;
+}
+
+.menubar-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.menubar-item-label {
+  flex: 1 1 auto;
+}
+
+/* The left check gutter (toggle ✓ / radio ●). Fixed width so labels align. */
+.menubar-check {
+  flex: 0 0 auto;
+  width: 1.1em;
+  text-align: center;
+  color: #396cd8;
+}
+
+.menubar-item:hover .menubar-check,
+.menubar-item:focus-visible .menubar-check {
+  color: #ffffff;
+}
+
+/* The accelerator (Ctrl+C), the submenu's current value, and the ▸ arrow — all
+ * right-aligned and quieter than the label; brightened on the hover/accent fill. */
+.menubar-accel,
+.menubar-subvalue {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #8a9097;
+}
+
+.menubar-arrow {
+  flex: 0 0 auto;
+  color: #8a9097;
+}
+
+.menubar-subvalue + .menubar-arrow {
+  margin-left: 0.1rem;
+}
+
+.menubar-item:hover .menubar-accel,
+.menubar-item:hover .menubar-subvalue,
+.menubar-item:hover .menubar-arrow,
+.menubar-item.open .menubar-subvalue,
+.menubar-item.open .menubar-arrow {
+  color: #d7e0f5;
+}
+
+.menubar-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #e0e3e6;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grid-menubar {
+    border-bottom-color: #444;
+    background: #26292d;
+    color: #d6d9dc;
+  }
+  .menubar-btn {
+    color: #e3e6e9;
+  }
+  .menubar-btn:hover {
+    background: #34383d;
+  }
+  .menubar-btn.open {
+    background: #3c4146;
+  }
+  .menubar-dim,
+  .menubar-muted {
+    color: #8b9097;
+  }
+  .menubar-dot {
+    color: #5b6168;
+  }
+  .menubar-modes {
+    color: #aeb3b9;
+  }
+  .menubar-msg {
+    color: #b9bdc2;
+  }
+  .menubar-msg.warn {
+    color: #ff8585;
+  }
+  .menubar-dropdown,
+  .menubar-flyout {
+    background: #2a2d30;
+    border-color: #444;
+  }
+  .menubar-item {
+    color: #d6d9dc;
+  }
+  .menubar-item:hover:not(:disabled),
+  .menubar-item:focus-visible,
+  .menubar-item.open {
+    background: #5b8def;
+    color: #11151a;
+  }
+  .menubar-check {
+    color: #5b8def;
+  }
+  .menubar-item:hover .menubar-check,
+  .menubar-item:focus-visible .menubar-check {
+    color: #11151a;
+  }
+  .menubar-accel,
+  .menubar-subvalue,
+  .menubar-arrow {
+    color: #7d838a;
+  }
+  .menubar-item:hover .menubar-accel,
+  .menubar-item:hover .menubar-subvalue,
+  .menubar-item:hover .menubar-arrow,
+  .menubar-item.open .menubar-subvalue,
+  .menubar-item.open .menubar-arrow {
+    color: #1c2937;
+  }
+  .menubar-sep {
+    background: #3c4146;
+  }
+}

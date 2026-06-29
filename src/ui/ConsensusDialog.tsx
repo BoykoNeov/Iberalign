@@ -12,7 +12,7 @@
 // are DISABLED (not hidden — hiding would reflow the card) per
 // `consensusControlsEnabled`, which mirrors exactly which fields the engine reads.
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   consensusControlsEnabled,
   type ConsensusConfig,
@@ -69,6 +69,28 @@ function Segmented<T extends string | number>({
           {o.label}
         </button>
       ))}
+    </span>
+  );
+}
+
+/** A left-column row label carrying an inline ⓘ help glyph. Hovering the glyph
+ *  shows a native tooltip (`title`) explaining what that row's options do — the same
+ *  affordance the per-segment `title`s give, raised to the row level so the meaning
+ *  of the whole control is discoverable without trying each segment. `off` dims the
+ *  label when its control is disabled, matching the segmented control's inactive look. */
+function RowLabel({ text, help, off }: { text: string; help: string; off?: boolean }) {
+  return (
+    <span className="cons-rowlabel" data-off={off ? "true" : undefined}>
+      {text}
+      <span
+        className="cons-help"
+        role="img"
+        tabIndex={0}
+        aria-label={`${text}: ${help}`}
+        title={help}
+      >
+        ⓘ
+      </span>
     </span>
   );
 }
@@ -134,6 +156,34 @@ export default function ConsensusDialog({
     onColoringChange({ ...coloring, [k]: v });
   const consPct = Math.round(coloring.conservationThreshold * 100);
 
+  // Drag-to-move. The card starts centered (the backdrop's flexbox); a drag on the
+  // header translates it by an accumulated offset. Pointer capture on the header
+  // (the same pattern the name-gutter selection uses) keeps the move/up events
+  // flowing even if the pointer leaves the header or the webview — so a fast drag
+  // can't get stuck. The offset resets on each open (the dialog is conditionally
+  // mounted). Dragging never starts from the × button (it's a <button>).
+  const headRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+
+  const onHeadPointerDown = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest("button")) return; // not the close button
+    dragRef.current = { px: e.clientX, py: e.clientY, ox: pos.x, oy: pos.y };
+    headRef.current?.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  };
+  const onHeadPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setPos({ x: d.ox + (e.clientX - d.px), y: d.oy + (e.clientY - d.py) });
+  };
+  const onHeadPointerUp = (e: React.PointerEvent) => {
+    if (dragRef.current && headRef.current?.hasPointerCapture(e.pointerId)) {
+      headRef.current.releasePointerCapture(e.pointerId);
+    }
+    dragRef.current = null;
+  };
+
   return (
     <div
       className="cons-backdrop"
@@ -148,9 +198,16 @@ export default function ConsensusDialog({
         role="dialog"
         aria-modal="true"
         aria-label="Consensus options"
+        style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="cons-head">
+        <div
+          className="cons-head"
+          ref={headRef}
+          onPointerDown={onHeadPointerDown}
+          onPointerMove={onHeadPointerMove}
+          onPointerUp={onHeadPointerUp}
+        >
           <span className="cons-title">Consensus &amp; coloring</span>
           <span className="cons-alpha">{alphabet}</span>
           <button type="button" className="cons-x" onClick={onClose} title="Close (Esc)">
@@ -160,7 +217,10 @@ export default function ConsensusDialog({
 
         <div className="cons-body">
           <div className="cons-row">
-            <span className="cons-rowlabel">Gap handling</span>
+            <RowLabel
+              text="Gap handling"
+              help="How gaps in a column affect its consensus — ignore them entirely, or force a gap / a * whenever any cell in the column is a gap."
+            />
             <Segmented<GapHandling>
               label="Gap handling"
               value={config.gap}
@@ -174,7 +234,10 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel">Agreement rule</span>
+            <RowLabel
+              text="Agreement rule"
+              help="How the consensus letter is chosen from the residues present: a strict IUPAC union code, all-identical only, a same-type code, or a simple majority."
+            />
             <Segmented<AgreementRule>
               label="Agreement rule"
               value={config.rule}
@@ -189,9 +252,11 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel" data-off={!enabled.sameTypeDisplay}>
-              Same-type display
-            </span>
+            <RowLabel
+              text="Same-type display"
+              off={!enabled.sameTypeDisplay}
+              help="When the Same-type rule applies, what symbol to show: R/Y, the most common base, or the IUPAC class code (S/W/K/M…)."
+            />
             <Segmented<SameTypeDisplay>
               label="Same-type display"
               value={config.sameTypeDisplay}
@@ -206,9 +271,11 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel" data-off={!enabled.sameTypeMaxBases}>
-              IUPAC class cutoff
-            </span>
+            <RowLabel
+              text="IUPAC class cutoff"
+              off={!enabled.sameTypeMaxBases}
+              help="For Same-type / IUPAC class: the largest set of distinct bases still treated as one class (≤2 → S/W/K/M only; ≤3 → also B/D/H/V)."
+            />
             <Segmented<SameTypeMaxBases>
               label="IUPAC class cutoff"
               value={config.sameTypeMaxBases}
@@ -222,9 +289,11 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel" data-off={!enabled.majorityThreshold}>
-              Majority threshold
-            </span>
+            <RowLabel
+              text="Majority threshold"
+              off={!enabled.majorityThreshold}
+              help="For the Majority rule: the fraction of the non-gap residues the top residue must exceed to become the consensus. 0% = always the most common (plurality)."
+            />
             <span className="cons-threshold">
               &gt;
               <input
@@ -246,9 +315,11 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel" data-off={!enabled.noConsensus}>
-              No-consensus fallback
-            </span>
+            <RowLabel
+              text="No-consensus fallback"
+              off={!enabled.noConsensus}
+              help="What to emit for a column when the rule finds no consensus — a gap (–) or a star (*)."
+            />
             <Segmented<NoConsensus>
               label="No-consensus fallback"
               value={config.noConsensus}
@@ -264,7 +335,17 @@ export default function ConsensusDialog({
           <div className="cons-section">Coloring</div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel">Consensus track</span>
+            <RowLabel
+              text="Consensus track"
+              help={
+                "Coloring of the consensus lane.\n" +
+                "Full — colour every cell by its residue.\n" +
+                "Glyph only — letter on a neutral fill, no colour.\n" +
+                "Conserved — colour only conserved columns; variable ones stay grey (the letter still shows).\n" +
+                "Variable — the inverse: colour only the non-conserved columns.\n" +
+                "“Conserved” uses the Conserved-at threshold + basis below. The Highlight option does NOT apply here."
+              }
+            />
             <Segmented<TrackColoring>
               label="Consensus track coloring"
               value={coloring.track}
@@ -279,7 +360,16 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel">Main grid</span>
+            <RowLabel
+              text="Main grid"
+              help={
+                "Coloring of the sequence cells.\n" +
+                "By residue — every cell by its residue.\n" +
+                "Conservation — keep the colour in conserved columns, fade the rest to grey.\n" +
+                "Match / Mismatch — highlight cells equal to / different from their column's consensus; fade the rest.\n" +
+                "With Highlight = Residue, Conservation looks just like By residue except the variable columns turn grey. The Highlight option below applies to these grid modes only — not to the track."
+              }
+            />
             <Segmented<GridColoring>
               label="Main grid coloring"
               value={coloring.grid}
@@ -294,9 +384,11 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel" data-off={!cEnabled.conservation}>
-              Conserved at
-            </span>
+            <RowLabel
+              text="Conserved at"
+              off={!cEnabled.conservation}
+              help="A column counts as “conserved” when its most-common residue reaches at least this fraction of the rows. Drives the grid's Conservation mode and the track's Conserved / Variable modes."
+            />
             <span className="cons-threshold">
               ≥
               <input
@@ -318,9 +410,11 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel" data-off={!cEnabled.conservation}>
-              Conservation basis
-            </span>
+            <RowLabel
+              text="Conservation basis"
+              off={!cEnabled.conservation}
+              help="What the conserved fraction is measured against: all rows (gaps count against conservation) or only the non-gap rows (agreement among the residues actually present)."
+            />
             <Segmented<ConservationDenominator>
               label="Conservation basis"
               value={coloring.conservationDenominator}
@@ -334,9 +428,11 @@ export default function ConsensusDialog({
           </div>
 
           <div className="cons-row">
-            <span className="cons-rowlabel" data-off={!cEnabled.highlightStyle}>
-              Highlight
-            </span>
+            <RowLabel
+              text="Highlight"
+              off={!cEnabled.highlightStyle}
+              help="How highlighted (kept) cells render in the grid's Conservation / Match / Mismatch modes: their own residue colour, or one flat uniform colour. The faded side is always grey. Grid only — the consensus track ignores this."
+            />
             <Segmented<HighlightStyle>
               label="Highlight style"
               value={coloring.highlightStyle}

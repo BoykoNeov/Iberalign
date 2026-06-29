@@ -40,7 +40,7 @@ import { DEFAULT_CELL } from "../state/viewport";
 import { NAME_W, RULER_H, TRACK_H, MINIMAP_H } from "../render/chrome";
 import { computeHover, cellAtPixel, type HoverInfo } from "./hover";
 import StatusBar from "./StatusBar";
-import Toolbar from "./Toolbar";
+import MenuBar from "./MenuBar";
 import { normalize, rectDims, type CellRect } from "../state/selection";
 import { xToCol, yToRow } from "../render/viewport";
 import { buildCopyText, COPY_CELL_CAP, type CopyFormat } from "../model/copy";
@@ -66,11 +66,17 @@ import {
 } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
 import { residueForKey } from "../model/typing";
-import type { PasteMode, CutMode, DeleteMode, TypeMode } from "./Toolbar";
+import type { PasteMode, CutMode, DeleteMode, TypeMode } from "./MenuBar";
 import ConsensusDialog from "./ConsensusDialog";
 import { defaultConfigFor, type ConsensusConfig } from "../model/consensus";
 import { ColumnData } from "../model/columnData";
-import { DEFAULT_COLORING, type ColoringConfig } from "../model/coloring";
+import {
+  DEFAULT_COLORING,
+  type ColoringConfig,
+  type GridColoring,
+  type TrackColoring,
+} from "../model/coloring";
+import { getScheme, listSchemes, DEFAULT_SCHEME_ID } from "../render/colors";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -85,6 +91,10 @@ const CHROME_VARS = {
   // reserved corner gap can't disagree.
   "--scrollbar-thickness": `${SCROLLBAR_THICKNESS}px`,
 } as CSSProperties;
+
+// The selectable color schemes for the View → Color scheme menu. Read once from the
+// registry (stable for the session) so the menu prop has a constant identity.
+const SCHEMES = listSchemes();
 
 // Wheel-zoom sensitivity: factor = exp(-deltaY * k). One ~100px notch ⇒ ~1.22×
 // in / 0.82× out, smooth on trackpads where deltaY is finer-grained.
@@ -151,9 +161,9 @@ export default function Grid({ view, onResized }: GridProps) {
   const lastZoomRef = useRef<string | null>(null);
 
   // Copy controls (Batch A — selection → clipboard). `selInfo` is the selected
-  // block's size, mirrored coarsely from the store for the toolbar readout and the
+  // block's size, mirrored coarsely from the store for the menu bar readout and the
   // Copy button's enabled state; `copyFormat` is the Raw|FASTA toggle; `copyMsg` is
-  // an ephemeral toolbar message. The refs back the once-bound keydown handler:
+  // an ephemeral menu bar message. The refs back the once-bound keydown handler:
   // `copyFormatRef` shadows the format so the handler reads the live value without
   // re-binding; `lastSelRef` throttles the readout re-render to the selection's
   // SIZE identity (a cursor moving within the same dims costs no render);
@@ -219,23 +229,32 @@ export default function Grid({ view, onResized }: GridProps) {
   // + consensus effects can push live config to the main grid's match/conservation
   // coloring, not just the track. Nulled in cleanup.
   const gridRendererRef = useRef<Canvas2DRenderer | null>(null);
+  // Bridge to the minimap (its scheme follows the View → Color scheme pick too, so
+  // the overview stays consistent with the grid). Nulled in cleanup.
+  const minimapRendererRef = useRef<MinimapLayer | null>(null);
+  // View options (Phase 5 menu bar). `schemeId` selects the residue color scheme
+  // (Vivid / Classic / Colorblind from the registry); pushed live to all three
+  // renderers. `trackVisible` shows/hides the consensus lane — the CSS row collapses
+  // to 0 (`--track-h`) and the track renderer skips its paint. Both apply with no IPC.
+  const [schemeId, setSchemeId] = useState<string>(DEFAULT_SCHEME_ID);
+  const [trackVisible, setTrackVisible] = useState(true);
   // The alphabet of the currently-loaded view, to detect a cross-alphabet load.
   const prevAlphabetRef = useRef<string | null>(null);
-  // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
+  // Menu bar message with a tone: `warn` (failures / dropped / truncated) shows bold
   // red, `info` (copied / inserted) is plain. The message PERSISTS — it does not
   // time out; it clears when the user takes their next action (see the effect below)
   // or when a new message replaces it.
   const [copyMsg, setCopyMsg] = useState<{ text: string; tone: "info" | "warn" } | null>(null);
   const doCopyRef = useRef<() => void>(() => {});
   // Paste bridge: `doPaste` is defined inside the mount effect (it needs the
-  // effect-scoped `runEdit`/`store`), so the toolbar button reaches it through
+  // effect-scoped `runEdit`/`store`), so the menu bar button reaches it through
   // this ref, set once on mount — same latest-callback idiom as `doCopyRef`.
   const doPasteRef = useRef<() => void>(() => {});
   // Cut bridge: like `doPaste`, `doCut` is effect-scoped (it needs `runEdit`), so
-  // the toolbar Cut button + Ctrl/⌘+X reach it through this ref.
+  // the menu bar Cut button + Ctrl/⌘+X reach it through this ref.
   const doCutRef = useRef<() => void>(() => {});
   // Structural-delete bridges: `doDeleteRows`/`doDeleteColumns` are effect-scoped
-  // (they need the resync helper), so the toolbar buttons, the context menu, and
+  // (they need the resync helper), so the menu bar buttons, the context menu, and
   // the Delete key reach them through these refs.
   const doDeleteRowsRef = useRef<() => void>(() => {});
   const doDeleteColumnsRef = useRef<() => void>(() => {});
@@ -260,7 +279,7 @@ export default function Grid({ view, onResized }: GridProps) {
   const onResizedRef = useRef(onResized);
   onResizedRef.current = onResized;
 
-  // Show a message in the toolbar. It stays until the user's next action clears it
+  // Show a message in the menu bar. It stays until the user's next action clears it
   // (or another message replaces it) — no auto-timeout, so a result/error can't be
   // missed by looking away.
   const showMsg = useCallback((text: string, tone: "info" | "warn" = "info") => {
@@ -335,13 +354,13 @@ export default function Grid({ view, onResized }: GridProps) {
   }, [writeClipboard, showMsg]);
   doCopyRef.current = doCopy;
 
-  // Toggle the copy format from the toolbar; mirror into the ref the keydown reads.
+  // Toggle the copy format from the menu bar; mirror into the ref the keydown reads.
   const handleSetFormat = useCallback((format: CopyFormat) => {
     copyFormatRef.current = format;
     setCopyFormat(format);
   }, []);
 
-  // Toggle the paste mode (Insert | Overwrite) from the toolbar; mirror into the
+  // Toggle the paste mode (Insert | Overwrite) from the menu bar; mirror into the
   // ref the keydown + effect-scoped paste read.
   const handleSetPasteMode = useCallback((mode: PasteMode) => {
     pasteModeRef.current = mode;
@@ -349,40 +368,40 @@ export default function Grid({ view, onResized }: GridProps) {
   }, []);
 
   // Toggle the insert shift scope (shift pasted rows only | shift all rows) from
-  // the toolbar; mirror into the ref the effect-scoped paste reads.
+  // the menu bar; mirror into the ref the effect-scoped paste reads.
   const handleSetShiftAll = useCallback((v: boolean) => {
     shiftAllRef.current = v;
     setShiftAll(v);
   }, []);
 
-  // Toolbar Paste button → the effect-scoped paste flow (via the ref above).
+  // Menu bar Paste button → the effect-scoped paste flow (via the ref above).
   const handlePaste = useCallback(() => doPasteRef.current(), []);
 
-  // Toggle the cut mode (Shorten | Mask) from the toolbar; mirror into the ref the
+  // Toggle the cut mode (Shorten | Mask) from the menu bar; mirror into the ref the
   // effect-scoped `doCut` + the once-bound Ctrl/⌘+X read.
   const handleSetCutMode = useCallback((mode: CutMode) => {
     cutModeRef.current = mode;
     setCutMode(mode);
   }, []);
 
-  // Toolbar Cut button → the effect-scoped cut flow (via the ref above).
+  // Menu bar Cut button → the effect-scoped cut flow (via the ref above).
   const handleCut = useCallback(() => doCutRef.current(), []);
 
-  // Toggle the Delete-key mode (Shorten | Mask) from the toolbar; mirror into the
+  // Toggle the Delete-key mode (Shorten | Mask) from the menu bar; mirror into the
   // ref the once-bound keydown reads.
   const handleSetDeleteMode = useCallback((mode: DeleteMode) => {
     deleteModeRef.current = mode;
     setDeleteMode(mode);
   }, []);
 
-  // Toggle the keyboard-entry mode (Replace | Insert) from the toolbar OR the Insert
+  // Toggle the keyboard-entry mode (Replace | Insert) from the menu bar OR the Insert
   // key; mirror into the ref the once-bound keydown + effect-scoped `doType` read.
   const handleSetTypeMode = useCallback((mode: TypeMode) => {
     typeModeRef.current = mode;
     setTypeMode(mode);
   }, []);
 
-  // Toolbar Del Rows / Del Cols buttons → the effect-scoped structural deletes.
+  // Menu bar Del Rows / Del Cols buttons → the effect-scoped structural deletes.
   const handleDeleteRows = useCallback(() => doDeleteRowsRef.current(), []);
   const handleDeleteColumns = useCallback(() => doDeleteColumnsRef.current(), []);
 
@@ -392,6 +411,28 @@ export default function Grid({ view, onResized }: GridProps) {
   const handleConsensusReset = useCallback(() => setConsensusConfig(null), []);
   const openConsensus = useCallback(() => setConsensusOpen(true), []);
   const closeConsensus = useCallback(() => setConsensusOpen(false), []);
+
+  // View menu. The scheme + track-visibility live in React state; effects below push
+  // them to the renderers. Grid + track coloring modes patch the shared
+  // `coloringConfig` (the same state the dialog edits — the menu is a quick-pick).
+  const handleSetScheme = useCallback((id: string) => setSchemeId(id), []);
+  const handleToggleTrack = useCallback(() => setTrackVisible((v) => !v), []);
+  const handleSetGridColoring = useCallback(
+    (mode: GridColoring) => setColoringConfig((c) => ({ ...c, grid: mode })),
+    [],
+  );
+  const handleSetTrackColoring = useCallback(
+    (mode: TrackColoring) => setColoringConfig((c) => ({ ...c, track: mode })),
+    [],
+  );
+  // While a menu dropdown is open, its panel can cover the grid — so bail the grid's
+  // window keydown (below) so Delete / arrows can't mutate or move the selection
+  // behind the open menu. Mirrors `consensusOpenRef` for the dialog. The MenuBar
+  // reports open/closed through this (Esc inside the menu is handled by the MenuBar).
+  const menuOpenRef = useRef(false);
+  const handleMenuOpenChange = useCallback((open: boolean) => {
+    menuOpenRef.current = open;
+  }, []);
 
   // Close the context menu on Escape (capture phase, so it beats the grid's
   // window keydown, which would otherwise also collapse the selection).
@@ -454,6 +495,7 @@ export default function Grid({ view, onResized }: GridProps) {
     // imperative renderers, like `storeRef`). Both nulled in cleanup below.
     trackRendererRef.current = track;
     gridRendererRef.current = renderer;
+    minimapRendererRef.current = minimap;
     // Grid first, then chrome (ruler / names / track lane / minimap), then the
     // selection overlay, then the scrollbar thumbs — all updated in one dirty
     // frame, so they never lag the grid under pan/zoom. (Stacking is by z-index/DOM,
@@ -466,10 +508,10 @@ export default function Grid({ view, onResized }: GridProps) {
     );
     storeRef.current = store;
 
-    // Mirror selection changes into React for the toolbar readout + Copy enabled
+    // Mirror selection changes into React for the menu bar readout + Copy enabled
     // state — coarse, throttled to the selection's SIZE identity, so a cursor
     // moving within the same dims costs no render. The rAF loop still reads the
-    // store's selection directly for drawing; this only feeds the toolbar.
+    // store's selection directly for drawing; this only feeds the menu bar.
     store.setSelectionListener((sel) => {
       if (!sel) {
         if (lastSelRef.current === null) return;
@@ -864,7 +906,7 @@ export default function Grid({ view, onResized }: GridProps) {
       showMsg(`${verb} ${w} × ${keptRows}${suffix}`, dropped > 0 || alphaNote ? "warn" : "info");
     };
 
-    // Paste entry point (Ctrl/⌘+V + the toolbar button): read the clipboard once,
+    // Paste entry point (Ctrl/⌘+V + the menu bar button): read the clipboard once,
     // then route on its shape — FASTA ⇒ insert new sequences; otherwise ⇒ a raw
     // block paste in the current Insert/Overwrite mode. The read is OUTSIDE the edit
     // guards so a denied / non-text clipboard is handled here.
@@ -901,7 +943,7 @@ export default function Grid({ view, onResized }: GridProps) {
     };
     doPasteRef.current = doPaste;
 
-    // Cut entry point (Ctrl/⌘+X + the toolbar button). Cut = COPY then REMOVE, in
+    // Cut entry point (Ctrl/⌘+X + the menu bar button). Cut = COPY then REMOVE, in
     // the current cut mode:
     //   - Shorten (default): delete the selected columns in the selected rows and
     //     shift each row's tail left (the alignment keeps its width).
@@ -929,7 +971,7 @@ export default function Grid({ view, onResized }: GridProps) {
     doCutRef.current = doCut;
 
     // Keyboard residue entry: write `letter` at the cursor's ACTIVE cell, then
-    // advance the cursor one cell right. Two modes (the toolbar / Insert-key toggle):
+    // advance the cursor one cell right. Two modes (the menu bar / Insert-key toggle):
     //   - Replace (default): overwrite the cell in place — a width-preserving
     //     `pasteOverwrite` of a 1×1 block (an in-place `SetCells`).
     //   - Insert: splice a new column into the active sequence — `pasteInsert` with
@@ -1192,8 +1234,11 @@ export default function Grid({ view, onResized }: GridProps) {
       // The consensus modal is up: let it own the keyboard (its Esc handler closes
       // it). Bail so arrows/Delete/Ctrl+Z can't drive the grid behind the dialog.
       if (consensusOpenRef.current) return;
+      // A menu dropdown is open and may cover the grid: bail so Delete / arrows can't
+      // mutate or move the selection behind it (the MenuBar handles Esc itself).
+      if (menuOpenRef.current) return;
       // Bound on `window` (not the grid cell) so Delete / Ctrl+Z / Ctrl+C / nav
-      // fire even when focus sits on a toolbar/header button after a click — the
+      // fire even when focus sits on a menu bar/header button after a click — the
       // grid is the app's primary surface while a file is loaded. Bail when an
       // editable field is focused so we never hijack real typing (none exist with
       // the grid up today, but this keeps the window binding future-safe).
@@ -1215,7 +1260,7 @@ export default function Grid({ view, onResized }: GridProps) {
         return;
       }
       // Paste (Ctrl/⌘+V) — drop the clipboard at the selection using the current
-      // toolbar settings (Insert|Overwrite mode, and for Insert the shift-pasted|
+      // menu settings (Insert|Overwrite mode, and for Insert the shift-pasted|
       // shift-all scope). `doPaste` reads + parses the clipboard, so a no-selection
       // / empty-clipboard paste is a guarded no-op.
       if ((e.ctrlKey || e.metaKey) && (e.key === "v" || e.key === "V")) {
@@ -1267,7 +1312,7 @@ export default function Grid({ view, onResized }: GridProps) {
         return;
       }
       // The Insert key toggles the keyboard-entry mode (Replace ⇄ Insert), the text-
-      // editor convention; the toolbar toggle is the discoverable equivalent.
+      // editor convention; the menu bar toggle is the discoverable equivalent.
       if (e.key === "Insert") {
         e.preventDefault();
         handleSetTypeMode(typeModeRef.current === "replace" ? "insert" : "replace");
@@ -1350,7 +1395,7 @@ export default function Grid({ view, onResized }: GridProps) {
       e.preventDefault();
     };
     // Window-level so the edit/nav keys work without the grid cell holding focus
-    // (the user can Delete right after clicking a toolbar button). The cell stays
+    // (the user can Delete right after clicking a menu bar button). The cell stays
     // tabIndex=0 + focused-on-click for a11y; the guard above protects inputs.
     window.addEventListener("keydown", onKeyDown);
 
@@ -1509,6 +1554,7 @@ export default function Grid({ view, onResized }: GridProps) {
       storeRef.current = null;
       trackRendererRef.current = null;
       gridRendererRef.current = null;
+      minimapRendererRef.current = null;
     };
   }, []);
 
@@ -1557,6 +1603,25 @@ export default function Grid({ view, onResized }: GridProps) {
     storeRef.current?.markDirty();
   }, [coloringConfig]);
 
+  // Live-apply the color scheme (View → Color scheme) to all three renderers (grid,
+  // consensus track, minimap) so the palette stays consistent. The glyph atlases
+  // re-ink lazily on the next letter-tier draw. Marks the store dirty to repaint.
+  useEffect(() => {
+    const scheme = getScheme(schemeId);
+    gridRendererRef.current?.setColorScheme(scheme);
+    trackRendererRef.current?.setColorScheme(scheme);
+    minimapRendererRef.current?.setColorScheme(scheme);
+    storeRef.current?.markDirty();
+  }, [schemeId]);
+
+  // Live-apply consensus-lane visibility (View → Show consensus track). The CSS row
+  // collapses to 0 height (`--track-h` below) and the renderer skips its paint; the
+  // grid reclaims the freed height via its ResizeObserver. Marks the store dirty.
+  useEffect(() => {
+    trackRendererRef.current?.setVisible(trackVisible);
+    storeRef.current?.markDirty();
+  }, [trackVisible]);
+
   // Zoom to an absolute cell size in CSS px (the status-bar slider). There is no
   // cursor for a slider drag, so anchor the zoom at the viewport CENTRE — the
   // factor `target/current` makes `zoomAbout` reduce to `clampCell(target)`, i.e.
@@ -1584,7 +1649,7 @@ export default function Grid({ view, onResized }: GridProps) {
   // over the canvas.
   return (
     <div className="grid-shell">
-      <Toolbar
+      <MenuBar
         selInfo={selInfo}
         copyFormat={copyFormat}
         onSetFormat={handleSetFormat}
@@ -1604,18 +1669,37 @@ export default function Grid({ view, onResized }: GridProps) {
         onPaste={handlePaste}
         onCut={handleCut}
         onOpenConsensus={openConsensus}
+        schemes={SCHEMES}
+        schemeId={schemeId}
+        onSetScheme={handleSetScheme}
+        gridColoring={coloringConfig.grid}
+        onSetGridColoring={handleSetGridColoring}
+        trackColoring={coloringConfig.track}
+        onSetTrackColoring={handleSetTrackColoring}
+        trackVisible={trackVisible}
+        onToggleTrack={handleToggleTrack}
         message={copyMsg}
+        onOpenChange={handleMenuOpenChange}
       />
-      <div className="grid-container" style={CHROME_VARS}>
+      {/* `--track-h` collapses to 0 when the consensus lane is hidden (the renderer
+          also skips its paint); the grid cell reclaims the freed height. */}
+      <div
+        className="grid-container"
+        style={{ ...CHROME_VARS, "--track-h": trackVisible ? `${TRACK_H}px` : "0px" } as CSSProperties}
+      >
         <div className="grid-corner" />
         <canvas ref={rulerRef} className="grid-ruler" />
         {/* Track lane (row 2): a left gutter label + the column-aligned lane
             canvas. TrackLaneRenderer paints the IUPAC consensus row over all rows,
-            scroll-synced and column-aligned to the grid. */}
-        <div className="grid-track-corner" aria-hidden="true">
+            scroll-synced and column-aligned to the grid. Hidden ⇒ `display:none`
+            (the row already collapsed via `--track-h: 0`). */}
+        <div
+          className={trackVisible ? "grid-track-corner" : "grid-track-corner hidden"}
+          aria-hidden="true"
+        >
           Consensus
         </div>
-        <canvas ref={trackRef} className="grid-track" />
+        <canvas ref={trackRef} className={trackVisible ? "grid-track" : "grid-track hidden"} />
         <canvas ref={nameRef} className="grid-names" />
         <div
           className="grid-canvas-cell"

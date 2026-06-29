@@ -71,6 +71,14 @@
   min-height: 0;
 }
 
+/* Consensus lane hidden (View → Show consensus track). The grid row already
+ * collapsed to 0 via `--track-h: 0`; `display:none` keeps a 0-height canvas/label
+ * from showing a sliver and drops them from the layout entirely. */
+.grid-track.hidden,
+.grid-track-corner.hidden {
+  display: none;
+}
+
 /* The name gutter and ruler are click/drag-selectable (whole sequences / columns)
  * and right-click-deletable — show a pointer and own the pointer for the drag. */
 .grid-names,

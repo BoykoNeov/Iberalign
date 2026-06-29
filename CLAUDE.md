@@ -334,8 +334,35 @@ dependency-light and surface toolchain/linker issues fast.
   grey rect for the tail. Letter/block tiers only (density already fades gaps);
   trailing only. An all-gap row renders as a recessive-grey row. typecheck + 225 vitest +
   build green.
-- **Consensus + coloring + shell — Phase 1 (quick wins) GUI smoke PASSED (2026-06-25,
-  user "all work"); Phase 2 (engine) code complete + green; Phases 3–5 not started.**
+- **Consensus + coloring + shell — ALL PHASES COMPLETE; GUI smoke PASSED + committed +
+  pushed (2026-06-29).** Phase 1 (quick wins, smoke 2026-06-25 + trailing-gap follow-up);
+  Phase 2 (engine, `924a0c5`); Phase 3 (options dialog, smoke 2026-06-29, `65dba05`);
+  Phase 4 (coloring — 4A data layer `e0eaf6a`; 4B renderers + 4C "Consensus & coloring"
+  dialog section `674fb4b`; smoke 2026-06-29); **Phase 5 (shell — menu bar replacing the
+  flat toolbar) + a Phase-5 follow-up (dialog help glyphs + draggable window), smoke PASSED
+  2026-06-29.** Phase 5: **`ui/MenuBar.tsx`** (+ `.css`) replaces `ui/Toolbar.{tsx,css}`
+  (deleted) — `Edit`/`View`/`Consensus` click-to-open dropdowns (`position:fixed` to escape
+  the strip clip; outside-mousedown + Esc close; no backdrop so bar buttons switch in one
+  click); mode groups are click-to-open `▸` flyout SUBMENUS (radio; the collapsed parent row
+  shows the current value). `Edit` = Copy/Cut/Paste/Delete-seqs/Delete-cols + 6 mode submenus
+  (copy format · paste mode · insert shift · cut mode · delete key · typing); `View` = Color
+  scheme · Grid coloring · Track coloring + Show-consensus-track toggle; `Consensus` =
+  Options… (the dialog). Right side keeps the selection readout + a compact destructive-mode
+  glance-state (paste/cut/del) + the message. `Grid.tsx`: `schemeId`/`trackVisible` state +
+  View quick-pick handlers that patch the SAME `coloringConfig` the dialog edits; live-apply
+  effects (`[schemeId]`→all 3 renderers + minimap aggregate rebuild; `[trackVisible]`→
+  `track.setVisible` + `--track-h:0` collapse so the grid reclaims the height); `menuOpenRef`
+  keydown guard (mirrors `consensusOpenRef`) so Delete/arrows can't mutate the selection
+  behind an open menu. `TrackLaneRenderer` gained `setColorScheme` + `setVisible`.
+  **Follow-up:** every `ConsensusDialog` option row's left label carries an inline ⓘ help
+  glyph (native `title` tooltip; the Full-vs-Conserved coloring answer lives in the
+  "Consensus track"/"Main grid"/"Conserved at"/"Highlight" tooltips — highlight is GRID-ONLY,
+  track "Conserved" keeps the glyph and only drops the fill); the dialog is drag-to-move by
+  its header (pointer-capture, same pattern as the name-gutter selection; resets on reopen;
+  never drags from ×). typecheck + **295 vitest** + build green. **The batch is closed** —
+  only carry-over smokes remain (keyboard entry + strict-IUPAC track, low-risk). Detail in
+  `docs/plans/consensus-coloring-{plan,context,tasks}.md`.
+  <details><summary>Earlier phase notes (kept for reference)</summary>
   **Phase 2 (consensus engine) — pure model, NO UI, the consensus track is byte-for-byte
   unchanged** (typecheck + 253 vitest + build; +28 new tests; advisor-reviewed +
   back-compat verified byte-identical). New **`model/profile.ts`**: a per-column
@@ -382,6 +409,7 @@ dependency-light and surface toolchain/linker issues fast.
   (track selectable + copy-as-IUPAC) folds in. Advisor-reviewed; user-decided the four open
   questions (menu bar; same-type exposes all 3 displays; track+grid coloring both; majority
   default strict >50%).
+  </details>
 
 ## Dev-docs
 
