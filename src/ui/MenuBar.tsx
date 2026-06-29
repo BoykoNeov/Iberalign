@@ -90,11 +90,12 @@ interface MenuBarProps {
   /** Cut the current selection to the clipboard (no-op upstream when nothing is
    *  selected) — copy then remove, in the cut mode. */
   onCut: () => void;
-  /** Pairwise-align the two selected sequences in place (Align → Align selected).
-   *  Enabled only when at least two rows are selected; the handler reports the
-   *  exact case (2 ⇒ align, 3+ ⇒ "requires MAFFT"). Global (Needleman–Wunsch)
-   *  only — end-to-end and lossless; Local (Smith–Waterman) trims to the matched
-   *  region, so it's deferred to a non-destructive view in a later milestone. */
+  /** Align the selected sequences in place (Align → Align selected sequences).
+   *  Enabled only when at least two rows are selected: exactly 2 ⇒ the optimal
+   *  pairwise Gotoh, 3+ ⇒ the in-process progressive multiple-sequence aligner.
+   *  Both are Global (Needleman–Wunsch) and lossless, aligning the whole ungapped
+   *  rows; Local (Smith–Waterman) trims to the matched region, so it's deferred to
+   *  a non-destructive view in a later milestone. */
   canAlign: boolean;
   onAlign: () => void;
   /** Open the consensus & coloring options modal. */

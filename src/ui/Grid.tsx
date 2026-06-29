@@ -63,6 +63,8 @@ import {
   type DeleteResult,
   pairwiseAlign,
   type PairwiseResult,
+  msaAlign,
+  type MsaResult,
   undoEdit,
   redoEdit,
 } from "../ipc/edit";
@@ -978,53 +980,65 @@ export default function Grid({ view, onResized }: GridProps) {
     };
     doCutRef.current = doCut;
 
-    // Pairwise-align the two SELECTED sequences (M3): replace their rows in place
-    // with the aligned pair, reversibly. GLOBAL only (Needleman–Wunsch) — end to
-    // end, lossless: every residue of both rows is kept, so the edit round-trips.
-    // (Local/Smith–Waterman trims to the matched region, which would discard
-    // residues; it's deferred to a non-destructive view in a later milestone.)
-    // The action handles exactly two rows; 3+ is multiple-sequence alignment
-    // (NP-hard) → deferred to MAFFT (M6), so it reports instead of guessing. The
-    // command returns score/%id/length and mutates the matrix (its width may grow);
-    // we capture the result in a closure and reuse `runEdit` to swap in the
-    // post-edit buffer (`getRenderBuffer`) — the row count, names, and alphabet are
-    // unchanged, so the fast in-place resize path applies and undo/redo ride the
-    // normal width-changing route. Serialized via `editingRef`.
+    // Align the SELECTED sequences in place, reversibly — replace their rows with
+    // their aligned form. Both paths are GLOBAL and lossless (every residue kept,
+    // so the edit round-trips) and align the WHOLE ungapped rows (the selection's
+    // column extent is ignored — sub-area/block align is future work):
+    //   - exactly 2 rows ⇒ the optimal pairwise Gotoh (Needleman–Wunsch).
+    //   - 3+ rows ⇒ the in-process progressive multiple-sequence aligner.
+    // Each command mutates the matrix (its width may grow) but leaves the row
+    // count, names, and alphabet unchanged, so we reuse `runEdit` to swap in the
+    // post-edit buffer (`getRenderBuffer`) — the fast in-place resize path, with
+    // undo/redo riding the normal width-changing route. Serialized via `editingRef`.
     const doAlign = async () => {
       const v = viewRef.current;
       if (!v) return;
       const sel = store.getSelection();
       if (!sel) {
-        showMsg("Select 2 sequences to align", "warn");
+        showMsg("Select 2+ sequences to align", "warn");
         return;
       }
       const { r0, r1 } = normalize(sel);
       const rows = r1 - r0 + 1;
       if (rows < 2) {
-        showMsg("Select 2 sequences to align", "warn");
+        showMsg("Select 2+ sequences to align", "warn");
         return;
       }
-      if (rows > 2) {
-        showMsg("Aligning 3+ sequences needs MAFFT (coming soon)", "warn");
+      if (rows === 2) {
+        let result: PairwiseResult | null = null;
+        const ok = await runEdit(async () => {
+          result = await pairwiseAlign(r0, r1, "global");
+          return await getRenderBuffer();
+        });
+        if (ok && result) {
+          const r: PairwiseResult = result;
+          // Two all-gap rows ⇒ both ungapped sequences are empty ⇒ length 0; the
+          // command skipped the edit (it would wipe the rows to width 0), so report
+          // it rather than claiming a 0-column alignment.
+          if (r.length === 0) {
+            showMsg("Nothing to align (both sequences are empty)", "warn");
+            return;
+          }
+          showMsg(
+            `Aligned: score ${r.score} · ${r.percentIdentity.toFixed(1)}% identity · ${r.length} cols`,
+          );
+        }
         return;
       }
-      let result: PairwiseResult | null = null;
+      // 3+ rows: progressive MSA over the contiguous selected rows.
+      const rowList = Array.from({ length: rows }, (_, i) => r0 + i);
+      let result: MsaResult | null = null;
       const ok = await runEdit(async () => {
-        result = await pairwiseAlign(r0, r1, "global");
+        result = await msaAlign(rowList);
         return await getRenderBuffer();
       });
       if (ok && result) {
-        const r: PairwiseResult = result;
-        // Two all-gap rows ⇒ both ungapped sequences are empty ⇒ length 0; the
-        // command skipped the edit (it would wipe the rows to width 0), so report
-        // it rather than claiming a 0-column alignment.
+        const r: MsaResult = result;
         if (r.length === 0) {
-          showMsg("Nothing to align (both sequences are empty)", "warn");
+          showMsg("Nothing to align (all selected sequences are empty)", "warn");
           return;
         }
-        showMsg(
-          `Aligned: score ${r.score} · ${r.percentIdentity.toFixed(1)}% identity · ${r.length} cols`,
-        );
+        showMsg(`Aligned ${r.numSeqs} sequences · ${r.length} cols`);
       }
     };
     doAlignRef.current = doAlign;
