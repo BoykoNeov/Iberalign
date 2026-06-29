@@ -69,6 +69,8 @@ import { residueForKey } from "../model/typing";
 import type { PasteMode, CutMode, DeleteMode, TypeMode } from "./Toolbar";
 import ConsensusDialog from "./ConsensusDialog";
 import { defaultConfigFor, type ConsensusConfig } from "../model/consensus";
+import { ColumnData } from "../model/columnData";
+import { DEFAULT_COLORING, type ColoringConfig } from "../model/coloring";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -208,6 +210,15 @@ export default function Grid({ view, onResized }: GridProps) {
   const consensusOpenRef = useRef(false);
   consensusOpenRef.current = consensusOpen;
   const trackRendererRef = useRef<TrackLaneRenderer | null>(null);
+  // Coloring options (Phase 4). Track + main-grid coloring modes, applied LIVE like
+  // the consensus config (an effect pushes it to BOTH renderers + marks the store
+  // dirty — no IPC). The default `by-residue` / `full` look is byte-identical to the
+  // pre-Phase-4 render, so this is inert until the user changes it in the dialog.
+  const [coloringConfig, setColoringConfig] = useState<ColoringConfig>(DEFAULT_COLORING);
+  // Bridge to the imperative grid renderer (like `trackRendererRef`) so the coloring
+  // + consensus effects can push live config to the main grid's match/conservation
+  // coloring, not just the track. Nulled in cleanup.
+  const gridRendererRef = useRef<Canvas2DRenderer | null>(null);
   // The alphabet of the currently-loaded view, to detect a cross-alphabet load.
   const prevAlphabetRef = useRef<string | null>(null);
   // Toolbar message with a tone: `warn` (failures / dropped / truncated) shows bold
@@ -404,7 +415,12 @@ export default function Grid({ view, onResized }: GridProps) {
     const canvas = canvasRef.current!;
     const cell = cellRef.current!;
     const store = new GridStore();
-    const renderer = new Canvas2DRenderer(canvas);
+    // The shared per-column derived-data cache (Phase 4): one profile, computed
+    // once per view, deriving the consensus bytes + conserved mask BOTH the grid and
+    // the track read. Passed to both renderers so they never compute it twice;
+    // invalidated on edit next to the renderers' own caches (see the edit paths).
+    const columnData = new ColumnData();
+    const renderer = new Canvas2DRenderer(canvas, undefined, columnData);
     // Pass selection accessors so the headers invert the selected rows / columns
     // (rows-mode → names; cols-mode → ruler), making whole-row/col selections
     // visible alongside the grid rectangle.
@@ -422,7 +438,7 @@ export default function Grid({ view, onResized }: GridProps) {
     // minimap — both `Drawable`s on the same rAF loop, so they stay frame-synced
     // with the grid under pan/zoom (the minimap's viewport rectangle follows; the
     // track lane's consensus cells scroll-sync via `colToX`).
-    const track = new TrackLaneRenderer(trackRef.current!);
+    const track = new TrackLaneRenderer(trackRef.current!, undefined, columnData);
     const minimap = new MinimapLayer(minimapRef.current!);
     // Two canvases: the invert canvas (mix-blend-mode: difference) and the
     // non-blending border canvas stacked above it — SelectionLayer owns and sizes
@@ -433,10 +449,11 @@ export default function Grid({ view, onResized }: GridProps) {
       () => store.getSelection(),
     );
     const scrollbars = new ScrollbarsLayer(vThumbRef.current!, hThumbRef.current!);
-    // Expose the track renderer so the consensus-config effect can push live
-    // config changes to it (the dialog is React state; this bridges to the
-    // imperative renderer, like `storeRef`). Nulled in cleanup below.
+    // Expose the track + grid renderers so the consensus/coloring effects can push
+    // live config changes to them (the dialog is React state; this bridges to the
+    // imperative renderers, like `storeRef`). Both nulled in cleanup below.
     trackRendererRef.current = track;
+    gridRendererRef.current = renderer;
     // Grid first, then chrome (ruler / names / track lane / minimap), then the
     // selection overlay, then the scrollbar thumbs — all updated in one dirty
     // frame, so they never lag the grid under pan/zoom. (Stacking is by z-index/DOM,
@@ -688,6 +705,7 @@ export default function Grid({ view, onResized }: GridProps) {
           renderer.invalidateContentCaches();
           minimap.invalidate();
           track.invalidate(); // consensus is memoized by view identity too
+          columnData.invalidate(); // shared profile / consensus / conserved caches
           store.markDirty();
           // Tell App when the width actually changed so the header readout follows.
           if (v.width !== prevWidth) onResizedRef.current?.(v.width);
@@ -717,6 +735,7 @@ export default function Grid({ view, onResized }: GridProps) {
       renderer.invalidateContentCaches();
       minimap.invalidate();
       track.invalidate(); // consensus is memoized by view identity too
+      columnData.invalidate(); // shared profile / consensus / conserved caches
       store.markDirty();
       if (v.width !== prevWidth) onResizedRef.current?.(v.width);
     };
@@ -1489,6 +1508,7 @@ export default function Grid({ view, onResized }: GridProps) {
       store.setSelectionListener(undefined);
       storeRef.current = null;
       trackRendererRef.current = null;
+      gridRendererRef.current = null;
     };
   }, []);
 
@@ -1517,15 +1537,25 @@ export default function Grid({ view, onResized }: GridProps) {
     prevAlphabetRef.current = view.meta.alphabet;
   }, [view]);
 
-  // Live-apply the consensus config to the track renderer (no IPC — consensus is
-  // a derived view). `null` ⇒ the track follows the alphabet default. Runs on
-  // every config change AND once on mount (the track starts at its own `null`
-  // default, so this is a harmless no-op then). Marks the store dirty so the rAF
-  // loop repaints the lane with the new bytes.
+  // Live-apply the consensus config (no IPC — consensus is a derived view). `null`
+  // ⇒ follow the alphabet default. Pushed to BOTH renderers: the track draws the
+  // consensus row, and the grid's match/mismatch-consensus coloring compares against
+  // the SAME bytes — feeding the grid the same config object lets them share the
+  // cached bytes (the config→bytes→grid cascade). Marks the store dirty to repaint.
   useEffect(() => {
     trackRendererRef.current?.setConfig(consensusConfig);
+    gridRendererRef.current?.setConsensusConfig(consensusConfig);
     storeRef.current?.markDirty();
   }, [consensusConfig]);
+
+  // Live-apply the coloring config (track mode + grid mode + conservation inputs) to
+  // BOTH renderers. The default look is byte-identical to the old render, so this is
+  // inert until the user changes a mode in the dialog. Marks the store dirty to repaint.
+  useEffect(() => {
+    trackRendererRef.current?.setColoring(coloringConfig);
+    gridRendererRef.current?.setColoring(coloringConfig);
+    storeRef.current?.markDirty();
+  }, [coloringConfig]);
 
   // Zoom to an absolute cell size in CSS px (the status-bar slider). There is no
   // cursor for a slider drag, so anchor the zoom at the viewport CENTRE — the
@@ -1660,6 +1690,8 @@ export default function Grid({ view, onResized }: GridProps) {
           isDefault={consensusConfig === null}
           onChange={setConsensusConfig}
           onReset={handleConsensusReset}
+          coloring={coloringConfig}
+          onColoringChange={setColoringConfig}
           onClose={closeConsensus}
         />
       )}

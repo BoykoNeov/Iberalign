@@ -121,6 +121,35 @@ describe("trailing-padding fill", () => {
   });
 });
 
+describe("coloring fills (muted / accent)", () => {
+  it("every built-in exposes a muted (faded) and an accent (uniform-highlight) fill", () => {
+    for (const scheme of [VIVID_SCHEME, CLASSIC_SCHEME, COLORBLIND_SCHEME]) {
+      expect(scheme.mutedStyle).toBe("rgb(224, 224, 224)");
+      expect(scheme.accentStyle).toBe("rgb(173, 216, 230)");
+    }
+  });
+
+  it("the muted fill is distinct from gap and trailing (a faded residue ≠ a gap)", () => {
+    const gap = VIVID_SCHEME.fillStyleFor(ord("-"));
+    expect(VIVID_SCHEME.mutedStyle).not.toBe(gap);
+    expect(VIVID_SCHEME.mutedStyle).not.toBe(VIVID_SCHEME.trailingStyle);
+  });
+
+  it("honors explicit muted / accent overrides", () => {
+    const s = makeScheme({
+      id: "m",
+      label: "M",
+      residues: {},
+      gap: [1, 1, 1],
+      fallback: [2, 2, 2],
+      muted: [3, 3, 3],
+      accent: [4, 5, 6],
+    });
+    expect(s.mutedStyle).toBe("rgb(3, 3, 3)");
+    expect(s.accentStyle).toBe("rgb(4, 5, 6)");
+  });
+});
+
 describe("makeScheme", () => {
   it("bakes a custom palette with gap and fallback handling", () => {
     const red: Rgb = [255, 0, 0];

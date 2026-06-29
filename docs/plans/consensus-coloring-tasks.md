@@ -18,7 +18,7 @@ Companion to `consensus-coloring-plan.md` (the design + decisions) and
 - [x] 4 advisor corrections (RNA U-rewrite centralized, integer-exact majority, ≤2 cutoff,
       pipeline order); back-compat byte-identical
 
-## Phase 3 — consensus options dialog ✅ code complete + green; GUI smoke PENDING
+## Phase 3 — consensus options dialog ✅ DONE (GUI smoke PASSED 2026-06-29; committed 65dba05 + pushed)
 - [x] `consensus.ts`: `consensusControlsEnabled(config)` pure helper (which sub-controls the
       pipeline reads) + tests
 - [x] `consensus.ts`: `sameTypeMaxBases: 2 | 3` config field (RESOLVED open question — user
@@ -35,22 +35,37 @@ Companion to `consensus-coloring-plan.md` (the design + decisions) and
       keydown guard; render the dialog with the EFFECTIVE config
 - [x] `Toolbar.tsx`: throwaway "Consensus…" button (Phase 5 → menu bar)
 - [x] typecheck + 259 vitest + build green
-- [ ] **GUI smoke** (next `tauri dev`): open the dialog; toggle each rule and watch the
-      track repaint live; confirm disabled states (strict-iupac greys fallback + sub-modes;
-      same-type display only under same-type; cutoff only under same-type+iupac-class;
-      threshold only under majority); `≤2`/`≤3` cutoff changes a 3-base column; majority %
-      input; Reset; Esc/click-outside/× close; arrows don't drive the grid behind the modal;
-      load a different-alphabet file → override resets to default
-- [ ] commit + push after smoke
+- [x] **GUI smoke** PASSED (2026-06-29, user "all good"); committed 65dba05 + pushed
 
-## Phase 4 — coloring (NOT STARTED)
-- [ ] profile cache (`profile(view, r0, r1)` memoized by view identity + invalidate-on-edit)
-- [ ] consensus-track coloring modes: full | none | consensus-only | nonconsensus-only
-- [ ] main-grid coloring: by-residue (current) | by-conservation (custom %) |
-      match-consensus | mismatch-consensus — threaded into `Canvas2DRenderer` as a passive
-      per-column array read (VERIFY it stays a lookup, not per-frame work)
+## Phase 4 — coloring (4A+4B+4C code complete + green; GUI smoke PENDING)
+### 4A — data layer ✅ DONE (committed e0eaf6a)
+- [x] `model/coloring.ts`: `ColoringConfig` + `DEFAULT_COLORING`; `conservedColumns(profiles,
+      threshold, denominator)` integer-exact inclusive `≥`, all-gap col never conserved;
+      `coloringControlsEnabled`; tests (both denominators, boundaries, all-gap guard)
+- [x] `model/columnData.ts`: `ColumnData` shared cache (`profiles`/`consensus`/`conserved`,
+      keyed by view + config object identity; `invalidate()`); NOT a WeakMap; tests
+### 4B — renderers ✅ code complete
+- [x] `render/runs.ts`: `forEachFillRun` styleFor widened to `(byte, col)`; +column-aware test
+- [x] `render/coloring.ts`: pure `makeGridStyleFor` + `trackFillFor`; headless tests
+- [x] `render/colors.ts`: `mutedStyle` + `accentStyle` themeable fills (defaults + overrides
+      tested); neutrals + SchemeSpec + makeScheme
+- [x] `Canvas2DRenderer`: inject `ColumnData`, `setColoring`/`setConsensusConfig`,
+      `gridStyleFor` built once/frame → `forEachFillRun`; density tier + trailing tail untouched
+- [x] `TrackLaneRenderer`: delegate consensus to `ColumnData`, `setColoring`, conserved-mask
+      for consensus-only/nonconsensus-only via `trackFillFor`
+- [x] `Grid.tsx`: construct `ColumnData` → both renderers; `columnData.invalidate()` in both
+      edit paths; `coloringConfig` state + `gridRendererRef`; fan consensus + coloring configs
+      to BOTH renderers via effects
+### 4C — dialog ✅ code complete
+- [x] `ConsensusDialog`: retitled "Consensus & coloring" + Coloring section (track/grid modes
+      + `≥N%` + basis + highlight toggles), live-apply, disabled via `coloringControlsEnabled`;
+      `.cons-section` divider CSS (light + dark)
+- [x] typecheck + 295 vitest + build green
+- [x] **GUI smoke** PASSED (2026-06-29, user "all good"); committed + pushed. KEY watch
+      confirmed = match-consensus needs rule=Majority under the DNA strict-IUPAC default
+- [x] commit + push after smoke
 
-## Phase 5 — shell (NOT STARTED)
+## Phase 5 — shell (IN PROGRESS)
 - [ ] toolbar → menu bar (`Edit` / `View` / `Consensus`); actions + checkable mode items +
       submenus; the "Consensus…" button + all toolbar toggles move here
 

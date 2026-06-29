@@ -22,6 +22,14 @@ import {
   type SameTypeMaxBases,
   type NoConsensus,
 } from "../model/consensus";
+import {
+  coloringControlsEnabled,
+  type ColoringConfig,
+  type TrackColoring,
+  type GridColoring,
+  type ConservationDenominator,
+  type HighlightStyle,
+} from "../model/coloring";
 import "./ConsensusDialog.css";
 
 interface SegOption<T extends string | number> {
@@ -79,6 +87,12 @@ interface ConsensusDialogProps {
   onChange: (next: ConsensusConfig) => void;
   /** Drop the override → back to the alphabet default. */
   onReset: () => void;
+  /** The active coloring config (track + main-grid coloring modes). Not
+   *  alphabet-dependent, so it has no "default" reset here — the modes are picked
+   *  directly. */
+  coloring: ColoringConfig;
+  /** Report a changed coloring config — `Grid` applies it live to both renderers. */
+  onColoringChange: (next: ColoringConfig) => void;
   /** Close the modal (no state change). */
   onClose: () => void;
 }
@@ -89,6 +103,8 @@ export default function ConsensusDialog({
   isDefault,
   onChange,
   onReset,
+  coloring,
+  onColoringChange,
   onClose,
 }: ConsensusDialogProps) {
   // Esc closes. Capture phase + stopPropagation so it pre-empts the grid's window
@@ -112,6 +128,12 @@ export default function ConsensusDialog({
 
   const pct = Math.round(config.majorityThreshold * 100);
 
+  // Coloring section: same live-apply pattern over the separate ColoringConfig.
+  const cEnabled = coloringControlsEnabled(coloring);
+  const setC = <K extends keyof ColoringConfig>(k: K, v: ColoringConfig[K]) =>
+    onColoringChange({ ...coloring, [k]: v });
+  const consPct = Math.round(coloring.conservationThreshold * 100);
+
   return (
     <div
       className="cons-backdrop"
@@ -129,7 +151,7 @@ export default function ConsensusDialog({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="cons-head">
-          <span className="cons-title">Consensus options</span>
+          <span className="cons-title">Consensus &amp; coloring</span>
           <span className="cons-alpha">{alphabet}</span>
           <button type="button" className="cons-x" onClick={onClose} title="Close (Esc)">
             ×
@@ -235,6 +257,94 @@ export default function ConsensusDialog({
               options={[
                 { value: "gap", label: "Gap –", title: "Emit a gap when the rule finds no consensus" },
                 { value: "star", label: "Star *", title: "Emit * when the rule finds no consensus" },
+              ]}
+            />
+          </div>
+
+          <div className="cons-section">Coloring</div>
+
+          <div className="cons-row">
+            <span className="cons-rowlabel">Consensus track</span>
+            <Segmented<TrackColoring>
+              label="Consensus track coloring"
+              value={coloring.track}
+              onChange={(v) => setC("track", v)}
+              options={[
+                { value: "full", label: "Full", title: "Color every consensus cell by its byte" },
+                { value: "none", label: "Glyph only", title: "Draw the consensus letter on a neutral fill (no color)" },
+                { value: "consensus-only", label: "Conserved", title: "Color only the conserved columns; leave the rest neutral" },
+                { value: "nonconsensus-only", label: "Variable", title: "Color only the variable columns; leave the conserved ones neutral" },
+              ]}
+            />
+          </div>
+
+          <div className="cons-row">
+            <span className="cons-rowlabel">Main grid</span>
+            <Segmented<GridColoring>
+              label="Main grid coloring"
+              value={coloring.grid}
+              onChange={(v) => setC("grid", v)}
+              options={[
+                { value: "by-residue", label: "By residue", title: "The per-residue palette (default)" },
+                { value: "by-conservation", label: "Conservation", title: "Keep the color in conserved columns; fade the rest" },
+                { value: "match-consensus", label: "Match", title: "Highlight cells equal to their column's consensus; fade the rest" },
+                { value: "mismatch-consensus", label: "Mismatch", title: "Highlight cells that DIFFER from the consensus (the variants); fade the matches" },
+              ]}
+            />
+          </div>
+
+          <div className="cons-row">
+            <span className="cons-rowlabel" data-off={!cEnabled.conservation}>
+              Conserved at
+            </span>
+            <span className="cons-threshold">
+              ≥
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={consPct}
+                disabled={!cEnabled.conservation}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  const clamped = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0;
+                  setC("conservationThreshold", clamped / 100);
+                }}
+                title="A column counts as conserved when its most-common residue reaches at least this fraction of the rows (see the basis). Drives the Conservation grid mode and the Conserved/Variable track modes."
+              />
+              %
+            </span>
+          </div>
+
+          <div className="cons-row">
+            <span className="cons-rowlabel" data-off={!cEnabled.conservation}>
+              Conservation basis
+            </span>
+            <Segmented<ConservationDenominator>
+              label="Conservation basis"
+              value={coloring.conservationDenominator}
+              disabled={!cEnabled.conservation}
+              onChange={(v) => setC("conservationDenominator", v)}
+              options={[
+                { value: "all-rows", label: "All rows", title: "Divide by every row, so gaps count against conservation" },
+                { value: "non-gap", label: "Non-gap", title: "Divide by the non-gap rows only — agreement among the residues present" },
+              ]}
+            />
+          </div>
+
+          <div className="cons-row">
+            <span className="cons-rowlabel" data-off={!cEnabled.highlightStyle}>
+              Highlight
+            </span>
+            <Segmented<HighlightStyle>
+              label="Highlight style"
+              value={coloring.highlightStyle}
+              disabled={!cEnabled.highlightStyle}
+              onChange={(v) => setC("highlightStyle", v)}
+              options={[
+                { value: "residue", label: "Residue color", title: "Highlighted cells keep their per-residue color; the rest fade to grey" },
+                { value: "uniform", label: "Uniform", title: "Highlighted cells get one flat color; the rest fade to grey" },
               ]}
             />
           </div>

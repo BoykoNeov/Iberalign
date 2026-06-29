@@ -48,6 +48,16 @@ export interface ColorScheme {
    *  `-`, trailing cells draw none) rather than by color, which leaves room for the
    *  background separation the eye actually needs. */
   readonly trailingStyle: string;
+  /** Fill for a DE-EMPHASIZED (faded) residue cell in the consensus-comparison /
+   *  by-conservation grid colorings — the "not highlighted" side. A light grey,
+   *  recessive but lighter than the medium fallback; the black glyph still reads,
+   *  so a faded residue stays identifiable (and is told from a real gap by the
+   *  glyph: a faded residue keeps its letter, a gap shows `-`). */
+  readonly mutedStyle: string;
+  /** Single flat fill for a HIGHLIGHTED cell under the `uniform` highlight style
+   *  (when the user opts out of per-residue color for the highlighted side). Light
+   *  enough that the black glyph stays legible. */
+  readonly accentStyle: string;
   /** Cell fill (CSS color) for a residue byte. Case-insensitive; gaps and
    *  unknown residues map to the scheme's gap / fallback color. */
   fillStyleFor(byte: number): string;
@@ -65,6 +75,12 @@ export interface SchemeSpec {
   gap: Rgb;
   /** Fill for trailing gap padding (default: a clear grey, well below the background). */
   trailing?: Rgb;
+  /** Fill for a faded (de-emphasized) residue in the coloring modes (default: a
+   *  light grey, lighter than `fallback`). */
+  muted?: Rgb;
+  /** Flat fill for a highlighted cell under the `uniform` highlight style (default:
+   *  a light blue). */
+  accent?: Rgb;
   /** Fill for residues not in `residues` (ambiguity codes, `*`, unknown). */
   fallback: Rgb;
   /** Grid background (default near-white). */
@@ -107,6 +123,8 @@ export function makeScheme(spec: SchemeSpec): ColorScheme {
     background: rgbCss(spec.background ?? [250, 250, 250]),
     densityStyle: rgbCss(spec.densityStyle ?? [68, 97, 122]),
     trailingStyle: rgbCss(spec.trailing ?? [230, 230, 230]),
+    mutedStyle: rgbCss(spec.muted ?? [224, 224, 224]),
+    accentStyle: rgbCss(spec.accent ?? [173, 216, 230]),
     fillStyleFor: (byte) => fill[byte & 0xff],
     inkStyleFor: (byte) => ink[byte & 0xff],
   };
@@ -115,6 +133,8 @@ export function makeScheme(spec: SchemeSpec): ColorScheme {
 // Shared neutrals so every scheme treats gaps / unknowns / chrome consistently.
 const GAP_RGB: Rgb = [232, 232, 232]; // light grey — interior gap, present but recessive
 const TRAILING_RGB: Rgb = [230, 230, 230]; // clear grey — trailing padding; ~gap lightness, well below bg (told from interior gaps by the absent `-` glyph)
+const MUTED_RGB: Rgb = [224, 224, 224]; // light grey — a faded (de-emphasized) residue in the coloring modes; black glyph still reads
+const ACCENT_RGB: Rgb = [173, 216, 230]; // light blue — the uniform-highlight fill; light enough for black glyphs
 const FALLBACK_RGB: Rgb = [158, 158, 158]; // medium grey — "uncertain", ≠ gap
 const BG_RGB: Rgb = [250, 250, 250];
 const DENSITY_RGB: Rgb = [68, 97, 122];
@@ -122,6 +142,8 @@ const DENSITY_RGB: Rgb = [68, 97, 122];
 const neutrals = {
   gap: GAP_RGB,
   trailing: TRAILING_RGB,
+  muted: MUTED_RGB,
+  accent: ACCENT_RGB,
   fallback: FALLBACK_RGB,
   background: BG_RGB,
   densityStyle: DENSITY_RGB,

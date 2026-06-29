@@ -20,7 +20,11 @@ export type RunEmit = (x0: number, width: number, style: string) => void;
  * Walk one row's visible columns, emitting one `(x0, width, style)` run per
  * maximal same-style span. `xs` holds the DEVICE-px left edges of the visible
  * columns plus a trailing right edge (`length === nCols + 1`); `bytes[base + colFirst + i]`
- * is column `i`'s residue; `styleFor` maps a byte to its fill color.
+ * is column `i`'s residue; `styleFor(byte, col)` maps a residue at its ABSOLUTE
+ * column to its fill color. (The column is passed so column-dependent colorings —
+ * by-conservation, match/mismatch-consensus — can key on it; the per-residue
+ * scheme ignores it. Adjacent same-style cells still coalesce: a binary highlight
+ * merges well, a per-column ramp degrades to per-cell, the documented worst case.)
  */
 export function forEachFillRun(
   bytes: Uint8Array,
@@ -28,7 +32,7 @@ export function forEachFillRun(
   colFirst: number,
   nCols: number,
   xs: Int32Array,
-  styleFor: (byte: number) => string,
+  styleFor: (byte: number, col: number) => string,
   emit: RunEmit,
 ): void {
   let runStyle = "";
@@ -37,7 +41,7 @@ export function forEachFillRun(
     const xL = xs[i];
     const xR = xs[i + 1];
     if (xR <= xL) continue; // zero-width cell → absorbed into the current run
-    const style = styleFor(bytes[base + colFirst + i]);
+    const style = styleFor(bytes[base + colFirst + i], colFirst + i);
     if (style !== runStyle) {
       if (runStyle !== "") emit(runX0, xL - runX0, runStyle);
       runStyle = style;

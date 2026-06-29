@@ -130,9 +130,10 @@ starts. This file is the agreed design + decisions + phasing.
   engine touch in Phase 3 (the plan flagged this exact branch as confirmable here) — NOT
   coloring/cache scope creep.
 
-- **Phase 4 (coloring) — IN PROGRESS. Sub-batch 4A (data layer) code complete + green
-  (typecheck + 278 vitest + build; +19 tests); pure model, NO UI/renderer yet — nothing
-  visibly changes.** Built data-layer-first per the advisor (feasibility confirmed: coloring
+- **Phase 4 (coloring) — code complete (4A+4B+4C) + green (typecheck + 295 vitest + build;
+  +33 tests over Phase 3). GUI smoke PASSED (2026-06-29, user "all good"); committed + pushed.**
+  4A (data layer) committed `e0eaf6a`; 4B (renderers) + 4C (dialog) committed after smoke. Built
+  data-layer-first per the advisor (feasibility confirmed: coloring
   stays a passive per-cell lookup, same cost class as `fillStyleFor(byte)`; per-column arrays
   computed once per view, NOT per frame). Two model files:
   - **`src/model/coloring.ts`** — `ColoringConfig` (track mode `full|none|consensus-only|
@@ -167,14 +168,47 @@ starts. This file is the agreed design + decisions + phasing.
     refinement). **Scope (advisor):** color at the letter/block tiers only — the density tier
     stays occupancy; the faint-grey trailing tail rect is preserved when `forEachFillRun`
     widens to `(byte, col)`.
-  - **Remaining: 4B** wire the renderers — generalize `forEachFillRun` styleFor to
-    `(byte, col)`; `Canvas2DRenderer`/`TrackLaneRenderer` take the shared `ColumnData` + the
-    coloring config + (consensus config) and resolve fills via precomputed color tables
-    (quantized/flat); `Grid` constructs the `ColumnData`, passes it to both, fans config
-    changes + edit `invalidate()` to both. Default config ⇒ byte-identical output. **4C** the
-    "Coloring" section in `ConsensusDialog` (track/grid modes + threshold + the two toggles),
-    live-apply; GUI smoke before commit (smoke-first for UI). 4B may commit (pure, green, not
-    user-facing); 4C is smoke-first.
+  - **4B (renderers) — done.** `forEachFillRun` styleFor widened to `(byte, col)` (existing
+    per-residue callbacks stay compatible; a unit test pins the column-aware behavior). New pure
+    `render/coloring.ts`: `makeGridStyleFor(mode, scheme, highlight, cons, mask) → (byte,col)=>css`
+    (gaps always keep gap color; highlighted side = residue color or flat `accentStyle`; faded
+    side = `mutedStyle`; missing array ⇒ safe by-residue fallback) + `trackFillFor(mode, scheme,
+    neutral, consByte, conserved)`; both fully unit-tested headlessly (`render/coloring.test.ts`).
+    Two new themeable `ColorScheme` fills: `mutedStyle` (faded grey `[224]`) + `accentStyle`
+    (uniform-highlight light-blue `[173,216,230]`), asserted in `colors.test.ts`.
+    `Canvas2DRenderer` injects the shared `ColumnData`, gains `setColoring`/`setConsensusConfig`,
+    builds the `(byte,col)` resolver ONCE per frame (`gridStyleFor`) and feeds it to
+    `forEachFillRun` — density tier untouched, trailing tail rect preserved. `TrackLaneRenderer`
+    delegates consensus to `ColumnData` (drops its local byte cache when shared) + reads the
+    conserved mask for the consensus-only/nonconsensus-only modes. **Run-merging holds:** faded
+    cells share `mutedStyle` so variable/mismatch regions coalesce into one rect (better than the
+    advisor's per-cell worst case). `Grid` constructs the `ColumnData`, passes it to both
+    renderers, adds `columnData.invalidate()` to both edit paths, holds `coloringConfig` state +
+    a `gridRendererRef`, and fans BOTH the consensus and coloring configs to both renderers via
+    effects (the cascade reaches the grid, not just the track).
+  - **4C (dialog) — done.** `ConsensusDialog` retitled "Consensus & coloring" with a new
+    **Coloring** section: Consensus-track mode (Full/Glyph-only/Conserved/Variable) · Main-grid
+    mode (By residue/Conservation/Match/Mismatch) · Conserved-at `≥N%` · Conservation basis
+    (All rows/Non-gap) · Highlight (Residue color/Uniform); live-apply via `onColoringChange`;
+    irrelevant controls DISABLED via `coloringControlsEnabled`. No coloring reset (it's not
+    alphabet-dependent; modes are picked directly). Coloring is NOT reset on a cross-alphabet
+    load (a view preference, alphabet-agnostic).
+  - **KNOWN smoke-watch — match/mismatch vs strict-IUPAC default:** match-consensus compares a
+    cell EXACTLY to the column's consensus byte. Under the DNA/RNA default rule (strict-IUPAC),
+    a variable column's consensus is an ambiguity CODE (e.g. `R`), which no plain cell equals →
+    match fades the whole column / mismatch highlights it. For a useful match view set the
+    agreement rule to **Majority** (or All-identical) so the consensus is a real base. Honest +
+    composable; IUPAC-compatible matching is the documented later refinement. **Flag in smoke.**
+  - **GUI-smoke checklist (next `tauri dev`):** open the dialog → Coloring section renders, the
+    new rows read cleanly, disabled controls dim correctly (conservation rows off under
+    by-residue + full; highlight off under by-residue grid). Track modes: Full (today's look),
+    Glyph-only (letters, no color), Conserved/Variable color only the matching columns and
+    respond to the `Conserved-at %` + basis. Grid modes: By residue (unchanged), Conservation
+    (conserved columns keep color, rest fade grey; threshold + basis change the split), Match
+    (with rule=Majority: matches pop, mismatches grey), Mismatch (inverse). Highlight toggle:
+    Residue keeps palette, Uniform flattens to light-blue. Live-apply is instant (no IPC). An
+    edit (type/paste/delete) updates the coloring (shared-cache invalidation). Density tier
+    (zoom way out) unaffected; trailing-gap grey tail still shows.
 
 **Phase 5 below: not started.**
 

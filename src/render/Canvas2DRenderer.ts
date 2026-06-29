@@ -27,6 +27,10 @@ import { GlyphAtlas } from "./glyphs";
 import { type ColorScheme, defaultScheme } from "./colors";
 import { isGap } from "../model/coords";
 import { trailingGapStarts } from "../model/trailing";
+import { ColumnData } from "../model/columnData";
+import { type ColoringConfig, DEFAULT_COLORING } from "../model/coloring";
+import { type ConsensusConfig } from "../model/consensus";
+import { makeGridStyleFor } from "./coloring";
 import type { Renderer } from "./Renderer";
 
 // One cell of overscan so a partly-scrolled edge cell is fully drawn.
@@ -53,12 +57,41 @@ export class Canvas2DRenderer implements Renderer {
   private trailView: AlignmentView | null = null;
   private trailStart: Int32Array | null = null;
 
-  constructor(canvas: HTMLCanvasElement, scheme: ColorScheme = defaultScheme()) {
+  // Phase-4 coloring. The shared per-column derived-data cache (consensus bytes /
+  // conserved mask) the grid reads for the consensus-comparison + conservation
+  // modes — owned by `Grid`, also fed to the track renderer, so the profile is
+  // built once. `coloring`/`consensusConfig` are pushed by `Grid` (the dialog);
+  // the default config draws byte-identical to the old per-residue path.
+  private columnData: ColumnData | null;
+  private coloring: ColoringConfig = DEFAULT_COLORING;
+  private consensusConfig: ConsensusConfig | null = null;
+
+  constructor(
+    canvas: HTMLCanvasElement,
+    scheme: ColorScheme = defaultScheme(),
+    columnData: ColumnData | null = null,
+  ) {
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("Canvas2DRenderer: 2D context unavailable");
     this.canvas = canvas;
     this.ctx = ctx;
     this.scheme = scheme;
+    this.columnData = columnData;
+  }
+
+  /** Set the main-grid coloring mode + its inputs (threshold, denominator, highlight
+   *  style). Live-apply: `Grid` marks the store dirty after this. The derived arrays
+   *  live in the shared `ColumnData` (keyed by config identity), so there is nothing
+   *  to invalidate here — a new config object simply misses the cache on next draw. */
+  setColoring(coloring: ColoringConfig): void {
+    this.coloring = coloring;
+  }
+
+  /** Set the consensus config the match/mismatch grid modes compare against (the
+   *  SAME object `Grid` gives the track, so they share the cached bytes). `null` =
+   *  the alphabet default. */
+  setConsensusConfig(config: ConsensusConfig | null): void {
+    this.consensusConfig = config;
   }
 
   resize(cssW: number, cssH: number, dpr: number = globalThis.devicePixelRatio || 1): void {
@@ -130,6 +163,26 @@ export class Canvas2DRenderer implements Renderer {
     this.trailView = null;
   }
 
+  /**
+   * The per-cell fill resolver `(byte, col) => css` for the current grid coloring
+   * mode. `by-residue` (and the no-`columnData` safety case) is the bare scheme
+   * lookup — byte-identical to the old path. The other modes fetch the column
+   * arrays they need from the shared cache ONCE here (each is O(1) after the first
+   * draw of a view/config) and close over them; the per-cell call is then a plain
+   * array read + compare, the same cost class as `fillStyleFor`.
+   */
+  private gridStyleFor(view: AlignmentView): (byte: number, col: number) => string {
+    const mode = this.coloring.grid;
+    if (mode === "by-residue" || !this.columnData) return this.scheme.fillStyleFor;
+    const cd = this.columnData;
+    const cons =
+      mode === "match-consensus" || mode === "mismatch-consensus"
+        ? cd.consensus(view, this.consensusConfig)
+        : null;
+    const mask = mode === "by-conservation" ? cd.conserved(view, this.coloring) : null;
+    return makeGridStyleFor(mode, this.scheme, this.coloring.highlightStyle, cons, mask);
+  }
+
   // ---- tiers -------------------------------------------------------------
 
   /**
@@ -152,6 +205,9 @@ export class Canvas2DRenderer implements Renderer {
 
     const atlas = letters ? this.ensureAtlas() : null;
     const trailStart = this.ensureTrailingStart(view);
+    // Per-cell fill resolver for the active coloring mode (column-aware). Built once
+    // per frame; defaults to the bare per-residue scheme lookup.
+    const styleFor = this.gridStyleFor(view);
 
     // Device-px column / row edges, computed once for this frame's window.
     const nCols = cols.last - cols.first + 1;
@@ -178,7 +234,7 @@ export class Canvas2DRenderer implements Renderer {
 
       // Fills: one rect per run-merged same-color span over the content columns only
       // (see `runs.ts`).
-      forEachFillRun(buf, base, cols.first, nContent, xs, scheme.fillStyleFor, (x0, w, style) => {
+      forEachFillRun(buf, base, cols.first, nContent, xs, styleFor, (x0, w, style) => {
         ctx.fillStyle = style;
         ctx.fillRect(x0, yTop, w, h);
       });

@@ -72,6 +72,20 @@
   padding: 14px;
 }
 
+/* A subsection divider inside the body (e.g. "Coloring") — a small uppercase
+ * label with a hairline above it, separating the consensus rows from the
+ * coloring rows without a second card. */
+.cons-section {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #e1e4e7;
+  color: #6a7077;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 /* One option row: a fixed-width label + the control, baseline-aligned. */
 .cons-row {
   display: flex;
@@ -210,6 +224,10 @@
   .cons-x:hover {
     background: #3a3f44;
     color: #e3e6e9;
+  }
+  .cons-section {
+    border-top-color: #444;
+    color: #9aa0a7;
   }
   .cons-rowlabel {
     color: #cfd3d7;

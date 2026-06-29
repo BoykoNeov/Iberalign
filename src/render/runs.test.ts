@@ -74,4 +74,24 @@ describe("forEachFillRun", () => {
   it("emits nothing for an empty window", () => {
     expect(runsOf([], [0])).toEqual([]);
   });
+
+  it("passes the ABSOLUTE column to styleFor (column-dependent coloring)", () => {
+    // A column-keyed style: even columns 'lo', odd columns 'hi' — independent of the
+    // byte. With colFirst 2 the first visible cell is absolute column 2 (even → lo).
+    const out: Run[] = [];
+    forEachFillRun(
+      Uint8Array.from([65, 65, 65, 65]), // all 'A'
+      0,
+      2, // colFirst → absolute cols 2, 3
+      2,
+      Int32Array.from([0, 10, 20]),
+      (_b, col) => (col % 2 === 0 ? "lo" : "hi"),
+      (x0, width, style) => out.push({ x0, width, style }),
+    );
+    // col2 → lo, col3 → hi: two distinct spans despite identical bytes.
+    expect(out).toEqual([
+      { x0: 0, width: 10, style: "lo" },
+      { x0: 10, width: 10, style: "hi" },
+    ]);
+  });
 });

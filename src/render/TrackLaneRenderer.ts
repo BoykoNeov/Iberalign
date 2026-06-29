@@ -26,6 +26,9 @@ import { colToX, visibleCols } from "./viewport";
 import { lodFor } from "./lod";
 import { columnConsensus, consensusBytes, type ConsensusConfig } from "../model/consensus";
 import { columnProfiles } from "../model/profile";
+import { ColumnData } from "../model/columnData";
+import { type ColoringConfig, DEFAULT_COLORING } from "../model/coloring";
+import { trackFillFor } from "./coloring";
 import { GlyphAtlas } from "./glyphs";
 import { type ColorScheme, defaultScheme } from "./colors";
 import { CHROME } from "./chrome";
@@ -47,13 +50,32 @@ export class TrackLaneRenderer {
   // back-compat path via `columnConsensus`); a config = the user's Phase-3 dialog
   // choices, applied live. Set by `setConfig`, which invalidates the byte cache.
   private config: ConsensusConfig | null = null;
+  // Phase-4 coloring. The shared per-column cache (owned by `Grid`, also fed to the
+  // grid renderer) supplies the consensus bytes + the conserved mask the track's
+  // consensus-only / nonconsensus-only modes need; the profile is built once. The
+  // default `full` track mode colors every cell — byte-identical to the old path.
+  private columnData: ColumnData | null;
+  private coloring: ColoringConfig = DEFAULT_COLORING;
 
-  constructor(canvas: HTMLCanvasElement, scheme: ColorScheme = defaultScheme()) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    scheme: ColorScheme = defaultScheme(),
+    columnData: ColumnData | null = null,
+  ) {
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("TrackLaneRenderer: 2D context unavailable");
     this.canvas = canvas;
     this.ctx = ctx;
     this.scheme = scheme;
+    this.columnData = columnData;
+  }
+
+  /** Set the consensus-track coloring mode + its inputs (the conservation
+   *  threshold/denominator the conserved mask reads). Live-apply: `Grid` marks the
+   *  store dirty after this. The mask lives in the shared `ColumnData` (keyed by
+   *  config identity), so nothing local needs invalidating. */
+  setColoring(coloring: ColoringConfig): void {
+    this.coloring = coloring;
   }
 
   resize(cssW: number, cssH: number, dpr: number = globalThis.devicePixelRatio || 1): void {
@@ -110,6 +132,12 @@ export class TrackLaneRenderer {
     const letters = lodFor(vp.cellW) === "letter";
     const atlas = letters ? this.ensureAtlas() : null;
 
+    // The conserved mask is only needed by the consensus-only / nonconsensus-only
+    // modes; fetch it once (shared cache) when they're active, else skip.
+    const mode = this.coloring.track;
+    const needMask = mode === "consensus-only" || mode === "nonconsensus-only";
+    const mask = needMask ? this.ensureConserved(view) : null;
+
     const h = sepY; // the consensus row fills the lane above the separator
     for (let col = cols.first; col <= cols.last; col++) {
       const xL = Math.round(colToX(vp, col) * dpr);
@@ -117,9 +145,12 @@ export class TrackLaneRenderer {
       const w = xR - xL;
       if (w <= 0) continue;
       const byte = cons[col];
-      // Color fill: A/C/G/T → their vivid base color; ambiguity codes (R/Y/N…) →
-      // the scheme's grey fallback (reads as "mixed"); `-` → gap grey.
-      ctx.fillStyle = this.scheme.fillStyleFor(byte);
+      // Fill per track mode: `full` colors every cell by its consensus byte
+      // (A/C/G/T → vivid base color; ambiguity codes → grey fallback; `-` → gap);
+      // `none` is glyph-only; consensus-only / nonconsensus-only color just the
+      // conserved / variable columns and leave the rest at the chrome background.
+      const conserved = mask ? mask[col] === 1 : false;
+      ctx.fillStyle = trackFillFor(mode, this.scheme, CHROME.bg, byte, conserved);
       ctx.fillRect(xL, 0, w, h);
       // Glyph (letter tier): a square tile centered in the cell so the letter is
       // not stretched by the lane's non-square cells (cellW wide × ~18px tall).
@@ -147,14 +178,23 @@ export class TrackLaneRenderer {
   }
 
   private ensureConsensus(view: AlignmentView): Uint8Array {
+    // Shared path: the consensus bytes come from the `ColumnData` cache (keyed by
+    // view + consensus-config identity), so the track and grid share the one profile
+    // and never compute the bytes twice. `null` config ⇒ the alphabet default.
+    if (this.columnData) return this.columnData.consensus(view, this.config);
+    // Fallback (constructed without a shared cache): local memo by view identity.
     if (this.consView === view && this.cons) return this.cons;
-    // `null` config → the alphabet default (back-compat); a config → the dialog's
-    // pipeline over a transient profile (profile caching is Phase 4 — same cost as
-    // a load, and the bytes are cached here by view identity regardless).
     this.cons = this.config
       ? consensusBytes(columnProfiles(view, 0, view.numRows - 1), this.config, view.meta.alphabet)
       : columnConsensus(view, 0, view.numRows - 1);
     this.consView = view;
     return this.cons;
+  }
+
+  /** The conserved mask for the consensus-only / nonconsensus-only modes, from the
+   *  shared cache (keyed by view + coloring-config identity). `null` without a
+   *  shared cache — those modes then behave like `none` (mask treated as all-false). */
+  private ensureConserved(view: AlignmentView): Uint8Array | null {
+    return this.columnData ? this.columnData.conserved(view, this.coloring) : null;
   }
 }
