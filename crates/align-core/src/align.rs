@@ -1,6 +1,6 @@
 //! Pairwise alignment (M3). Needleman–Wunsch (global) and Smith–Waterman
-//! (local) with affine (Gotoh) gaps. MSA is intentionally *not* here — it is
-//! delegated to external aligners (MAFFT/MUSCLE/Clustal Omega), see spec §5.
+//! (local) with affine (Gotoh) gaps. Multiple-sequence alignment builds *on* this
+//! engine — the in-process progressive aligner lives in [`crate::msa`].
 //!
 //! The DP is a textbook 3-state Gotoh: `M` (residue·residue), `X` (a-residue vs
 //! a gap), `Y` (gap vs a b-residue). A gap of length `k` costs

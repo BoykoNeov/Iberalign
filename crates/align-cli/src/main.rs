@@ -31,6 +31,7 @@ fn main() -> ExitCode {
         },
         Some("generate") => generate(&args[1..]),
         Some("align") => align_cmd(&args[1..]),
+        Some("msa") => msa_cmd(&args[1..]),
         Some(other) => {
             eprintln!("error: unknown subcommand '{other}'");
             usage();
@@ -232,6 +233,134 @@ fn first_sequence(path: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Read a FASTA file and return every sequence's name + ungapped residues.
+fn all_sequences(path: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let out = align_core::parse_fasta(&bytes).map_err(|e| format!("parse '{path}': {e}"))?;
+    let ds = align_core::Dataset::from_records(&out.records);
+    if ds.sequences.is_empty() {
+        return Err(format!("'{path}' has no sequences"));
+    }
+    Ok(ds
+        .sequences
+        .iter()
+        .map(|s| (s.name.clone(), s.residues.clone()))
+        .collect())
+}
+
+/// `msa <file.fasta> [--matrix NAME] [--gap-open N] [--gap-extend N]`
+///
+/// Progressively aligns **all** sequences in the file (their ungapped residues)
+/// with the in-process aligner and prints the result as aligned FASTA. Matrix and
+/// gap penalties default to the alphabet inferred across all records (`widen`).
+/// Always global — progressive alignment has no local mode. The headless exercise
+/// of the MSA engine.
+fn msa_cmd(args: &[String]) -> ExitCode {
+    let mut files: Vec<&str> = Vec::new();
+    let mut matrix_name: Option<String> = None;
+    let mut gap_open: Option<i32> = None;
+    let mut gap_extend: Option<i32> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--matrix" => match args.get(i + 1) {
+                Some(n) => {
+                    matrix_name = Some(n.clone());
+                    i += 2;
+                }
+                None => {
+                    eprintln!("error: --matrix expects a name");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--gap-open" => match args.get(i + 1).map(|s| s.parse::<i32>()) {
+                Some(Ok(v)) => {
+                    gap_open = Some(v);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("error: --gap-open expects an integer");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--gap-extend" => match args.get(i + 1).map(|s| s.parse::<i32>()) {
+                Some(Ok(v)) => {
+                    gap_extend = Some(v);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("error: --gap-extend expects an integer");
+                    return ExitCode::FAILURE;
+                }
+            },
+            s if s.starts_with("--") => {
+                eprintln!("error: unknown flag '{s}'");
+                return ExitCode::FAILURE;
+            }
+            s => {
+                files.push(s);
+                i += 1;
+            }
+        }
+    }
+
+    if files.len() != 1 {
+        eprintln!(
+            "usage: iberalign-cli msa <file.fasta> \
+             [--matrix blosum62|blosum45|blosum80|pam250|dna] [--gap-open N] [--gap-extend N]"
+        );
+        return ExitCode::FAILURE;
+    }
+
+    let seqs = match all_sequences(files[0]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Infer the alphabet across every sequence (widen), like `align` does over two.
+    let alphabet = seqs
+        .iter()
+        .map(|(_, r)| align_core::Alphabet::infer(r))
+        .reduce(|acc, a| acc.widen(a))
+        .unwrap_or(align_core::Alphabet::Dna);
+    let matrix = match &matrix_name {
+        Some(n) => match align_core::SubstitutionMatrix::by_name(n) {
+            Some(m) => m,
+            None => {
+                eprintln!(
+                    "error: unknown matrix '{n}' (try blosum62|blosum45|blosum80|pam250|dna)"
+                );
+                return ExitCode::FAILURE;
+            }
+        },
+        None => align_core::SubstitutionMatrix::default_for(alphabet),
+    };
+    let defaults = align_core::Scoring::default_for(alphabet);
+    let scoring = align_core::Scoring {
+        gap_open: gap_open.unwrap_or(defaults.gap_open),
+        gap_extend: gap_extend.unwrap_or(defaults.gap_extend),
+    };
+
+    let refs: Vec<&[u8]> = seqs.iter().map(|(_, r)| r.as_slice()).collect();
+    let res = align_core::progressive_align(&refs, &matrix, scoring);
+
+    eprintln!(
+        "aligned {} sequences ({}) to width {}",
+        seqs.len(),
+        alphabet.label(),
+        res.length
+    );
+    for ((name, _), row) in seqs.iter().zip(&res.rows) {
+        println!(">{name}");
+        println!("{}", String::from_utf8_lossy(row));
+    }
+    ExitCode::SUCCESS
+}
+
 /// `generate <rows> <cols> <out.fasta> [gap_pct]` — write a synthetic
 /// equal-width FASTA to a file, for the rendering perf smoke (spec §12).
 ///
@@ -356,6 +485,8 @@ fn usage() {
     eprintln!("  iberalign-cli generate    <rows> <cols> <out.fasta> [gap_pct]");
     eprintln!("  iberalign-cli align       <a.fasta> <b.fasta> [--mode global|local]");
     eprintln!("                            [--matrix NAME] [--gap-open N] [--gap-extend N]");
+    eprintln!("  iberalign-cli msa         <file.fasta> [--matrix NAME]");
+    eprintln!("                            [--gap-open N] [--gap-extend N]");
 }
 
 #[cfg(test)]
@@ -401,6 +532,40 @@ mod tests {
             !buf.contains(&b'-'),
             "gap_pct=0 must produce no '-' residues"
         );
+    }
+
+    /// The `msa` subcommand's decision path: infer + widen the alphabet across
+    /// all sequences, pick the default matrix/scoring, align. Asserts the engine
+    /// output is equal-width with input fidelity (the property `msa` prints).
+    #[test]
+    fn msa_path_aligns_to_equal_width_with_fidelity() {
+        use align_core::{progressive_align, Alphabet, Scoring, SubstitutionMatrix};
+        let seqs: Vec<Vec<u8>> = vec![
+            b"ACGTACGTACGT".to_vec(),
+            b"ACGTTCGTACGT".to_vec(),
+            b"ACGAACGTAGT".to_vec(),
+        ];
+        let alphabet = seqs
+            .iter()
+            .map(|r| Alphabet::infer(r))
+            .reduce(|acc, a| acc.widen(a))
+            .unwrap();
+        let matrix = SubstitutionMatrix::default_for(alphabet);
+        let scoring = Scoring::default_for(alphabet);
+        let refs: Vec<&[u8]> = seqs.iter().map(|v| v.as_slice()).collect();
+        let res = progressive_align(&refs, &matrix, scoring);
+
+        let degap = |s: &[u8]| -> Vec<u8> {
+            s.iter()
+                .copied()
+                .filter(|&b| b != b'-' && b != b'.')
+                .collect()
+        };
+        for (row, src) in res.rows.iter().zip(&seqs) {
+            assert_eq!(row.len(), res.length, "every row is the alignment width");
+            assert_eq!(degap(row), *src, "row de-gaps to its input");
+        }
+        assert!(res.length >= 12, "width at least the longest input");
     }
 
     #[test]

@@ -14,9 +14,15 @@ non-trivial change. This file is the short list of things to get right.
   keystroke or per frame.
 - **No DOM-per-cell.** The grid is a virtualized Canvas2D (→ WebGL later)
   drawing only the visible window. Millions of cells; never one element each.
-- **Don't write MSA/phylogenetics heuristics.** Optimal MSA is NP-hard —
-  shell out to MAFFT/MUSCLE/Clustal Omega; trees to FastTree/IQ-TREE. The only
-  hand-written alignment is *pairwise* NW/SW (Gotoh affine), in `align-core`.
+- **MSA is in-process, never shelled out** (user decision 2026-06-29: no shell
+  integration for alignment). Optimal MSA is NP-hard, so don't claim optimality or
+  try to reimplement MAFFT. Our own *progressive* aligner (ClustalW-class:
+  all-pairs distance → UPGMA → profile–profile Gotoh) lives in `align-core::msa`,
+  built on the hand-written *pairwise* NW/SW (Gotoh affine) in `align-core::align`.
+  Higher quality comes **later** from bundling *permissively licensed* aligners
+  **in-process** (compiled-in/FFI — the MEGA model: KAlign v3 Apache-2.0, POA/
+  `spoa` MIT), never from a subprocess. Phylogenetic **trees** still shell out to
+  FastTree/IQ-TREE (separate concern; unchanged).
 - **Three coordinate spaces, never conflated:** ungapped position ↔ alignment
   column ↔ screen pixel. Mapping lives in `align-core::coords`; the round-trip
   invariant is property-tested. Features anchor to *ungapped* positions and
