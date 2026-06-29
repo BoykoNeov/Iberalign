@@ -130,9 +130,53 @@ starts. This file is the agreed design + decisions + phasing.
   engine touch in Phase 3 (the plan flagged this exact branch as confirmable here) — NOT
   coloring/cache scope creep.
 
-**Phases 4–5 below: not started.** (Profile CACHING is deferred to Phase 4, when the
-colorings share the profile; Phases 2–3's consensus path builds a transient profile per
-call — same cost as before, the track's by-view-identity byte cache untouched.)
+- **Phase 4 (coloring) — IN PROGRESS. Sub-batch 4A (data layer) code complete + green
+  (typecheck + 278 vitest + build; +19 tests); pure model, NO UI/renderer yet — nothing
+  visibly changes.** Built data-layer-first per the advisor (feasibility confirmed: coloring
+  stays a passive per-cell lookup, same cost class as `fillStyleFor(byte)`; per-column arrays
+  computed once per view, NOT per frame). Two model files:
+  - **`src/model/coloring.ts`** — `ColoringConfig` (track mode `full|none|consensus-only|
+    nonconsensus-only` · grid mode `by-residue|by-conservation|match-consensus|
+    mismatch-consensus` · `conservationThreshold` · `conservationDenominator` ·
+    `highlightStyle`) + `DEFAULT_COLORING` (today's look). Pure `conservedColumns(profiles,
+    threshold, denominator) → Uint8Array` (1/0): conserved iff top-residue fraction `≥`
+    threshold, **integer-exact** (`topCount*1000 ≥ round(threshold*1000)*denom`, reusing the
+    consensus majority trick); an all-gap column is NEVER conserved. NB conservation uses an
+    INCLUSIVE `≥` (deliberately distinct from the consensus majority's exclusive `>`). The
+    same threshold + mask drive BOTH the grid's by-conservation AND the track's
+    consensus-only/nonconsensus-only (one notion of "conserved"). `coloringControlsEnabled`
+    mirrors `consensusControlsEnabled` for the dialog's disabled states.
+  - **`src/model/columnData.ts`** — `ColumnData`, the shared per-column derived-data cache
+    (the "one profile, computed once, deriving everything" backbone). Owned by `Grid`, passed
+    to BOTH renderers: `profiles(view)` (view-identity keyed), `consensus(view, config|null)`
+    + `conserved(view, coloring)` (keyed by view AND config OBJECT IDENTITY), `invalidate()`.
+    **NOT a WeakMap** (in-place edits reuse the view object → would serve stale); single-slot
+    + explicit `invalidate()` on edit, like the renderers' occupancy/trail caches. The config
+    object-identity key resolves the **config→bytes→grid cascade** the advisor flagged: both
+    renderers read consensus bytes from HERE, so a dialog change reaches the grid's
+    match-coloring, not just the track.
+  - **User decisions (2026-06-29):** BOTH conservation denominators (`all-rows` gaps-dilute /
+    `non-gap` agreement-among-present) AND BOTH highlight looks (`residue` keep-palette /
+    `uniform` flat) are dialog toggles ("add both options", consistent with the Phase-3 cutoff
+    choice). Defaults: `all-rows`, `residue`, ≥50%.
+  - **Design choices baked in:** by-conservation is a THRESHOLD highlight (conserved columns
+    keep color, rest fade), NOT a continuous ramp — matches "custom percentage" (#8) and
+    unifies with the track modes (a ramp is an easy later add; the advisor's quantized-ramp
+    note is the mechanism IF one lands). match/mismatch compare a cell's UPPERCASED residue
+    `==` the column's consensus byte (exact; IUPAC-compatible matching is a possible later
+    refinement). **Scope (advisor):** color at the letter/block tiers only — the density tier
+    stays occupancy; the faint-grey trailing tail rect is preserved when `forEachFillRun`
+    widens to `(byte, col)`.
+  - **Remaining: 4B** wire the renderers — generalize `forEachFillRun` styleFor to
+    `(byte, col)`; `Canvas2DRenderer`/`TrackLaneRenderer` take the shared `ColumnData` + the
+    coloring config + (consensus config) and resolve fills via precomputed color tables
+    (quantized/flat); `Grid` constructs the `ColumnData`, passes it to both, fans config
+    changes + edit `invalidate()` to both. Default config ⇒ byte-identical output. **4C** the
+    "Coloring" section in `ConsensusDialog` (track/grid modes + threshold + the two toggles),
+    live-apply; GUI smoke before commit (smoke-first for UI). 4B may commit (pure, green, not
+    user-facing); 4C is smoke-first.
+
+**Phase 5 below: not started.**
 
 ## Open questions (surface in the Phase-3 dialog)
 
