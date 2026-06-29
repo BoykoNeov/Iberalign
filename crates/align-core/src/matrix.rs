@@ -79,6 +79,20 @@ impl SubstitutionMatrix {
         Self::from_table(BLOSUM_ORDER, &PAM250)
     }
 
+    /// Resolve a matrix by case-insensitive name (`blosum62` / `blosum45` /
+    /// `blosum80` / `pam250` / `dna` | `match` | `nt`), or `None` if unknown.
+    /// Shared by the CLI and the Tauri command so both accept the same names.
+    pub fn by_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "blosum62" => Some(Self::blosum62()),
+            "blosum45" => Some(Self::blosum45()),
+            "blosum80" => Some(Self::blosum80()),
+            "pam250" => Some(Self::pam250()),
+            "dna" | "match" | "nt" => Some(Self::match_mismatch(2, -1)),
+            _ => None,
+        }
+    }
+
     /// Score of aligning `a` against `b`. Case-insensitive; unknown protein
     /// symbols fall back to the `X` row.
     #[inline]

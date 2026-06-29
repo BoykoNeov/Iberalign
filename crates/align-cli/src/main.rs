@@ -190,7 +190,7 @@ fn align_cmd(args: &[String]) -> ExitCode {
 
     let alphabet = align_core::Alphabet::infer(&a).widen(align_core::Alphabet::infer(&b));
     let matrix = match &matrix_name {
-        Some(n) => match matrix_by_name(n) {
+        Some(n) => match align_core::SubstitutionMatrix::by_name(n) {
             Some(m) => m,
             None => {
                 eprintln!(
@@ -229,18 +229,6 @@ fn first_sequence(path: &str) -> Result<Vec<u8>, String> {
     match ds.sequences.first() {
         Some(seq) => Ok(seq.residues.clone()),
         None => Err(format!("'{path}' has no sequences")),
-    }
-}
-
-/// Map a `--matrix` name to a [`align_core::SubstitutionMatrix`].
-fn matrix_by_name(name: &str) -> Option<align_core::SubstitutionMatrix> {
-    match name.to_ascii_lowercase().as_str() {
-        "blosum62" => Some(align_core::SubstitutionMatrix::blosum62()),
-        "blosum45" => Some(align_core::SubstitutionMatrix::blosum45()),
-        "blosum80" => Some(align_core::SubstitutionMatrix::blosum80()),
-        "pam250" => Some(align_core::SubstitutionMatrix::pam250()),
-        "dna" | "match" | "nt" => Some(align_core::SubstitutionMatrix::match_mismatch(2, -1)),
-        _ => None,
     }
 }
 
@@ -417,10 +405,11 @@ mod tests {
 
     #[test]
     fn matrix_names_resolve_case_insensitively() {
-        assert!(matrix_by_name("BLOSUM62").is_some());
-        assert!(matrix_by_name("pam250").is_some());
-        assert!(matrix_by_name("dna").is_some());
-        assert!(matrix_by_name("nt").is_some());
-        assert!(matrix_by_name("nonsense").is_none());
+        use align_core::SubstitutionMatrix;
+        assert!(SubstitutionMatrix::by_name("BLOSUM62").is_some());
+        assert!(SubstitutionMatrix::by_name("pam250").is_some());
+        assert!(SubstitutionMatrix::by_name("dna").is_some());
+        assert!(SubstitutionMatrix::by_name("nt").is_some());
+        assert!(SubstitutionMatrix::by_name("nonsense").is_none());
     }
 }

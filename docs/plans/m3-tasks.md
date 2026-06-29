@@ -30,14 +30,18 @@ reversible replace of exactly 2 selected rows; 3+ → "requires MAFFT" (M6 next)
 - [x] usage text; unknown-flag handling; `matrix_by_name` test; CLI smoke against fixtures
       (DNA global/local, protein auto-BLOSUM62, bad-matrix exits 1) — green
 
-## Phase C — IPC + reversible edit (`src-tauri` + `src/ipc`)
-- [ ] `commands.rs`: `pairwise_align(row_a, row_b, mode, matrix, gap_open, gap_extend)` —
-      read ungapped residues, run `pairwise`, apply `Batch[SpliceRows…]` (replace 2 rows +
-      widen all to `W=max(width,len)`), return `PairwiseResultDto{score,percent_identity,length}`
-- [ ] `lib.rs`: register `commands::pairwise_align`
-- [ ] `src/ipc/commands.ts`: `pairwiseAlign(...)` wrapper + `PairwiseResult` TS type + `fromWire`
-- [ ] frontend resync after the edit (meta + buffer → `replaceAll`); undo/redo round-trips
-- [ ] typecheck + build green
+## Phase C — IPC + reversible edit (`src-tauri` + `src/ipc`) ✅ DONE
+- [x] `matrix.rs`: shared `SubstitutionMatrix::by_name` (CLI + command resolve names one way)
+- [x] `commands.rs`: `pairwise_align(row_a, row_b, mode, matrix?, gap_open?, gap_extend?)` —
+      read ungapped residues, run `pairwise`, apply a single reversible `SpliceRows` via
+      `realign_splice` (replace 2 rows padded to `target`; widen others when the pair is
+      wider; `target=W` when only 2 rows so it can shrink). Returns
+      `PairwiseResultDto{score,percent_identity,length}`
+- [x] `realign_splice` unit tests: shrink-to-pair-width, widen-others, equal-width + undo round-trip
+- [x] `lib.rs`: registered `commands::pairwise_align`
+- [x] `src/ipc/edit.ts`: `pairwiseAlign(...)` wrapper + `PairwiseResult`/`PairwiseMode` types + fromWire
+- [x] cargo test workspace + clippy + fmt + typecheck green (33 iberalign tests)
+- [ ] frontend resync after the edit (buffer → `resizeContents`); undo/redo round-trips — Phase D wiring
 
 ## Phase D — UI (`src/ui`; needs GUI smoke)
 - [ ] "Align selected" MenuBar entry; enabled iff exactly 2 distinct rows selected;

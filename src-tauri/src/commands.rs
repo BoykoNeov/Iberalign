@@ -3,7 +3,10 @@
 //! serializable DTOs so the engine types stay UI-agnostic.
 
 use crate::state::AppState;
-use align_core::{Alphabet, CellWrite, Dataset, EditCmd, RawRecord, RowData, RowSplice, SeqId};
+use align_core::{
+    pairwise, AlignMode, Alphabet, CellWrite, Dataset, EditCmd, RawRecord, RowData, RowSplice,
+    Scoring, SeqId, SubstitutionMatrix,
+};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::State;
@@ -781,6 +784,148 @@ pub async fn delete_columns(
     })
 }
 
+// ---- pairwise alignment (M3) -----------------------------------------------
+
+/// Outcome of [`pairwise_align`]: the score, %-identity, and aligned length of
+/// the pairwise alignment that was just applied to the two selected rows. Small
+/// JSON for the status readout; the alignment matrix changed (its width may have
+/// grown), so the caller re-syncs its render buffer from [`get_render_buffer`]
+/// (the row count, names, and alphabet are unchanged, so no meta re-fetch).
+#[derive(Serialize)]
+pub struct PairwiseResultDto {
+    pub score: i32,
+    pub percent_identity: f32,
+    pub length: usize,
+}
+
+/// Build the reversible edit that replaces rows `row_a`/`row_b` with their
+/// aligned forms, keeping the matrix rectangular. The two rows are spliced to the
+/// aligned bytes padded to `target` width; when the pair came out WIDER than the
+/// current width (and other rows exist) every other row is trailing-padded to
+/// match. `target` is the pair's width `w` when these are the only two rows (so a
+/// re-alignment can shrink the matrix), else `max(w, current_width)` (other rows
+/// can only grow, never lose content). One [`EditCmd::SpliceRows`] (one splice per
+/// row) ⇒ one undo step, with the inverse captured by the engine.
+fn realign_splice(
+    ds: &Dataset,
+    row_a: usize,
+    row_b: usize,
+    aligned_a: &[u8],
+    aligned_b: &[u8],
+) -> EditCmd {
+    let cur = ds.alignment.width;
+    let n = ds.alignment.num_rows();
+    let w = aligned_a.len(); // == aligned_b.len()
+    let other_rows_exist = n > 2;
+    let target = if other_rows_exist { w.max(cur) } else { w };
+
+    let pad_to_target = |bytes: &[u8]| -> Vec<u8> {
+        let mut v = bytes.to_vec();
+        v.resize(target, b'-');
+        v
+    };
+
+    let mut splices = vec![
+        RowSplice {
+            row: row_a,
+            col: 0,
+            remove: cur,
+            bytes: pad_to_target(aligned_a),
+        },
+        RowSplice {
+            row: row_b,
+            col: 0,
+            remove: cur,
+            bytes: pad_to_target(aligned_b),
+        },
+    ];
+    if target > cur {
+        let tail = vec![b'-'; target - cur];
+        for r in 0..n {
+            if r != row_a && r != row_b {
+                splices.push(RowSplice {
+                    row: r,
+                    col: cur,
+                    remove: 0,
+                    bytes: tail.clone(),
+                });
+            }
+        }
+    }
+    EditCmd::SpliceRows { splices }
+}
+
+/// Pairwise-align the two selected sequences (their UNGAPPED residues) and
+/// replace their rows in place with the aligned pair, reversibly. The alignment
+/// matrix may grow in width; the row count is unchanged. `mode` is `"global"`
+/// (Needleman–Wunsch) or `"local"` (Smith–Waterman). `matrix` / `gap_open` /
+/// `gap_extend` are optional overrides — by default the matrix and gap penalties
+/// follow the two sequences' (widened) alphabet (protein → BLOSUM62 / −11 / −1,
+/// nucleotide → match·mismatch 2/−1 / −10 / −1). Errors if nothing is loaded, the
+/// rows are the same or out of bounds, or an override is invalid. Returns the
+/// score / %-identity / length; the caller re-syncs the render buffer.
+#[tauri::command]
+pub async fn pairwise_align(
+    row_a: usize,
+    row_b: usize,
+    mode: String,
+    matrix: Option<String>,
+    gap_open: Option<i32>,
+    gap_extend: Option<i32>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<PairwiseResultDto, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+
+    let n = ds.alignment.num_rows();
+    if row_a == row_b {
+        return Err("select two different sequences to align".to_string());
+    }
+    if row_a >= n || row_b >= n {
+        return Err(format!("row out of bounds (alignment has {n} rows)"));
+    }
+    let mode = match mode.as_str() {
+        "global" => AlignMode::Global,
+        "local" => AlignMode::Local,
+        other => return Err(format!("unknown alignment mode '{other}'")),
+    };
+
+    let alphabet = ds.sequences[row_a]
+        .alphabet
+        .widen(ds.sequences[row_b].alphabet);
+    let matrix = match &matrix {
+        Some(name) => {
+            SubstitutionMatrix::by_name(name).ok_or_else(|| format!("unknown matrix '{name}'"))?
+        }
+        None => SubstitutionMatrix::default_for(alphabet),
+    };
+    let defaults = Scoring::default_for(alphabet);
+    let scoring = Scoring {
+        gap_open: gap_open.unwrap_or(defaults.gap_open),
+        gap_extend: gap_extend.unwrap_or(defaults.gap_extend),
+    };
+
+    // Align the ungapped residues (a fresh pairwise alignment ignores any prior
+    // gaps in the rows).
+    let a = ds.sequences[row_a].residues.clone();
+    let b = ds.sequences[row_b].residues.clone();
+    let result = pairwise(&a, &b, &matrix, mode, scoring);
+
+    let cmd = realign_splice(ds, row_a, row_b, &result.aligned_a, &result.aligned_b);
+    history.apply(ds, cmd).map_err(|e| e.to_string())?;
+
+    Ok(PairwiseResultDto {
+        score: result.score,
+        percent_identity: result.percent_identity,
+        length: result.length,
+    })
+}
+
 /// Undo the most recent edit; returns the post-edit render buffer (empty when
 /// there is nothing to undo). Errors if nothing is loaded.
 #[tauri::command]
@@ -1383,5 +1528,56 @@ mod tests {
         history.undo(&mut ds).unwrap();
         assert_eq!(ds.alignment.num_rows(), 2);
         assert_eq!(flatten_buffer(&ds), b"ACGTTTTT");
+    }
+
+    // ---- pairwise realign splice ------------------------------------------
+
+    #[test]
+    fn realign_splice_two_rows_shrinks_to_pair_width() {
+        // Only two rows: the realigned pair becomes the whole alignment, so the
+        // matrix can shrink to the pair's width (here 4, from a padded width 6).
+        let mut ds = Dataset::from_records(&[rec("a", "AC--GT"), rec("b", "ACGGGT")]);
+        let mut history = align_core::EditStack::new();
+        let cmd = realign_splice(&ds, 0, 1, b"ACGT", b"ACGT");
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"ACGT");
+        // One reversible edit: undo restores the originals + width.
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.rows[0].gapped, b"AC--GT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"ACGGGT");
+    }
+
+    #[test]
+    fn realign_splice_widens_other_rows_with_trailing_gaps() {
+        // Three rows, width 4; the realigned pair comes out width 6, so every OTHER
+        // row trailing-pads to 6 (its content untouched) to keep the matrix square.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT"), rec("c", "GGGG")]);
+        let mut history = align_core::EditStack::new();
+        let cmd = realign_splice(&ds, 0, 2, b"A-C-GT", b"-G-G-G");
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.rows[0].gapped, b"A-C-GT");
+        assert_eq!(ds.alignment.rows[2].gapped, b"-G-G-G");
+        assert_eq!(ds.alignment.rows[1].gapped, b"TTTT--"); // untouched row, padded
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[1].gapped, b"TTTT");
+    }
+
+    #[test]
+    fn realign_splice_equal_width_leaves_others_untouched() {
+        // Pair width == current width and >2 rows: no widening splices, only the two
+        // target rows are replaced; the other row keeps its exact bytes.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "TTTT"), rec("c", "GGGG")]);
+        let mut history = align_core::EditStack::new();
+        let cmd = realign_splice(&ds, 0, 1, b"A-GT", b"T-TT");
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[0].gapped, b"A-GT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"T-TT");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGGG");
     }
 }

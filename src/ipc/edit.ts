@@ -122,6 +122,53 @@ export async function deleteColumns(c0: number, c1: number): Promise<DeleteResul
   return { numRows: wire.num_rows, width: wire.width };
 }
 
+/** Mode for {@link pairwiseAlign}: Needleman–Wunsch (global) or Smith–Waterman (local). */
+export type PairwiseMode = "global" | "local";
+
+/** Outcome of {@link pairwiseAlign}: score, %-identity, and aligned length of the
+ *  pairwise alignment just applied to the two selected rows. Mirror of the Rust
+ *  `PairwiseResultDto`. */
+export interface PairwiseResult {
+  score: number;
+  percentIdentity: number;
+  length: number;
+}
+
+interface PairwiseResultWire {
+  score: number;
+  percent_identity: number;
+  length: number;
+}
+
+/**
+ * Pairwise-align two selected sequences (by alignment-row index) and replace
+ * their rows in place with the aligned pair — reversibly (undo/redo). `mode` is
+ * `"global"` (NW) or `"local"` (SW); `matrix`/`gapOpen`/`gapExtend` default to the
+ * sequences' (widened) alphabet when omitted. The matrix WIDTH may grow but the
+ * row count, names, and alphabet are unchanged — so (unlike a buffer-returning
+ * edit) this returns a small JSON status and the caller re-syncs its render buffer
+ * from `getRenderBuffer` + `view.resizeContents`. Undo/redo ride the normal
+ * width-changing `undoEdit`/`redoEdit` path.
+ */
+export async function pairwiseAlign(
+  rowA: number,
+  rowB: number,
+  mode: PairwiseMode,
+  matrix?: string,
+  gapOpen?: number,
+  gapExtend?: number,
+): Promise<PairwiseResult> {
+  const wire = await invoke<PairwiseResultWire>("pairwise_align", {
+    rowA,
+    rowB,
+    mode,
+    matrix: matrix ?? null,
+    gapOpen: gapOpen ?? null,
+    gapExtend: gapExtend ?? null,
+  });
+  return { score: wire.score, percentIdentity: wire.percent_identity, length: wire.length };
+}
+
 /** Undo the most recent edit. Empty result ⇒ nothing to undo. */
 export function undoEdit(): Promise<Uint8Array> {
   return editBuffer("undo_edit");
