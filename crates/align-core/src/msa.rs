@@ -519,6 +519,35 @@ mod tests {
         );
     }
 
+    /// Quality anchor for the N≥3 profile–profile path (the genuinely new code):
+    /// two identical sequences plus a third with one clean interior insertion. The
+    /// optimal MSA is *exactly* one gap column in the two short rows — width equals
+    /// the longest input, never wider. A wider result means the DP is scattering
+    /// gaps (over-gapping), which fidelity + equal-width alone cannot catch.
+    #[test]
+    fn three_seq_single_insertion_no_overgapping() {
+        let seqs: Vec<&[u8]> = vec![b"ACGTACGT", b"ACGTACGT", b"ACGTGACGT"];
+        let res = progressive_align(&seqs, &dna(), gaps());
+        assert_msa(&seqs, &res);
+        assert_eq!(
+            res.length, 9,
+            "single insertion ⇒ width == longest input, no scattered gaps"
+        );
+        assert_eq!(
+            res.rows[0], res.rows[1],
+            "the identical pair stays identical"
+        );
+        assert_eq!(
+            res.rows[2], b"ACGTGACGT",
+            "the longest (inserted) row is ungapped"
+        );
+        assert_eq!(
+            res.rows[0].iter().filter(|&&b| b == b'-').count(),
+            1,
+            "each short row carries exactly one gap (the insertion column)"
+        );
+    }
+
     #[test]
     fn empty_sequence_among_several() {
         let seqs: Vec<&[u8]> = vec![b"ACGT", b"", b"ACGT"];
