@@ -1,0 +1,22 @@
+[package]
+name = "align-extern"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Feature-gated in-process external MSA backends (KAlign v3 FFI). Pure-Rust unless a backend feature is enabled."
+
+[features]
+default = []
+# Compile KAlign v3 (vendored submodule) in-process and expose `kalign_align`.
+# Requires the `vendor/kalign` submodule to be checked out.
+kalign = []
+
+[dependencies]
+align-core.workspace = true
+
+[build-dependencies]
+# Always present (tiny); build.rs only compiles C when the `kalign` feature is on.
+cc = "1"

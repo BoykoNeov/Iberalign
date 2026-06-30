@@ -1,0 +1,3 @@
+[submodule "crates/align-extern/vendor/kalign"]
+	path = crates/align-extern/vendor/kalign
+	url = https://github.com/TimoLassmann/kalign.git

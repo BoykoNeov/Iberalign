@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/align-core",
     "crates/align-cli",
+    "crates/align-extern",
     "src-tauri",
 ]
 
@@ -18,6 +19,7 @@ description = "Cross-platform desktop viewer/editor for multiple sequence alignm
 
 [workspace.dependencies]
 align-core = { path = "crates/align-core" }
+align-extern = { path = "crates/align-extern" }
 thiserror = "2"
 proptest = "1"
 

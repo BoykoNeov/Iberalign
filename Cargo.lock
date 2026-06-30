@@ -33,6 +33,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "align-extern"
+version = "0.1.0"
+dependencies = [
+ "align-core",
+ "cc",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
