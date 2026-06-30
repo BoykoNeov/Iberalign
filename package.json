@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri",
-    "tauri:kalign": "tauri dev --features kalign",
+    "dev:clean": "powershell -NoProfile -File scripts/dev-clean.ps1",
+    "tauri:dev": "npm run dev:clean && tauri dev",
+    "tauri:kalign": "npm run dev:clean && tauri dev --features kalign",
     "tauri:build:kalign": "tauri build --features kalign"
   },
   "dependencies": {
