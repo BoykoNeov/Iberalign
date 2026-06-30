@@ -37,7 +37,11 @@ Status: **Phases 0/C/A/D/E code complete + committed + pushed; GUI smoke PENDING
       --features kalign + build align-cli --features kalign); default jobs untouched
 - [x] NOTICE: KAlign v3.5.1 Apache-2.0 attribution (compiled-in, feature-gated)
 - [x] CLAUDE.md invariant + milestone; memory; docs trio
-- [ ] commit + push Phase E
+- [x] commit + push Phase E (`52a76ef`); **CI green incl. the new Windows kalign job**
+- [x] Review hardening (`5739a6f`): losslessness guard (degap(out)==in ⇒ else
+      OutputMismatch) + cross-alphabet (RNA U / protein X,* / ambiguity / lowercase)
+      + empty-FFI tests; documented KAlign's biotype rejection of pathological
+      ambiguity. CI green (incl. kalign job, twice).
 
 ## PENDING (user-driven)
 - [ ] **GUI smoke**: `npm run tauri:kalign` → 3+ rows → Align (Engine=KAlign) → rows
