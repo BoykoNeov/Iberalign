@@ -45,6 +45,16 @@ future session needs.
   `--matrix`/`--gap-*` apply only to the Progressive backend.
 - Output `char***` is plain `malloc`'d (`MMALLOC`==malloc) ⇒ free each row then the
   array with `free`. KAlign **preserves input order** and **case** (soft-masking).
+- **Losslessness guard** (advisor-driven): the in-place edit resyncs residues from the
+  spliced bytes, so it TRUSTS each row == input + gaps. The wrapper verifies
+  `degap(out[i]) == in[i]` byte-for-byte and returns `ExternError::OutputMismatch`
+  otherwise — turning any future canonicalization into a safe visible failure, not
+  silent corruption. Verified preserved across RNA (`U`), protein (`X`/`*`), DNA
+  ambiguity, and lowercase.
+- **Biotype limitation:** KAlign's own detector rejects *pathologically* ambiguous DNA
+  (≥~half non-ACGT reads as protein under `--type dna`) with a clean
+  `ExternError::Failed` — realistic/sparse `N` is fine; the user falls back to
+  Progressive. Empty/all-gap inputs across the FFI return cleanly (no crash) — tested.
 
 ## Key files
 - `crates/align-extern/{Cargo.toml,build.rs,src/lib.rs,src/kalign.rs,shim/*}`

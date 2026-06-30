@@ -57,6 +57,9 @@ pub enum ExternError {
     EmptyResult,
     /// An input sequence contained an interior NUL byte (not a valid residue).
     InteriorNul,
+    /// An aligned row was not the input with gaps inserted — KAlign canonicalized a
+    /// residue. Rejected so the lossless in-place edit can't silently rewrite data.
+    OutputMismatch,
 }
 
 impl fmt::Display for ExternError {
@@ -67,8 +70,31 @@ impl fmt::Display for ExternError {
             ExternError::InteriorNul => {
                 write!(f, "input sequence contains an interior NUL byte")
             }
+            ExternError::OutputMismatch => {
+                write!(
+                    f,
+                    "KAlign altered residues (not gap-only); refusing to avoid data loss"
+                )
+            }
         }
     }
+}
+
+/// True iff `row` is exactly `input` with `-` gaps inserted — i.e. the non-gap
+/// bytes of `row`, in order, equal `input` byte-for-byte (NO case folding). This is
+/// the losslessness invariant our in-place edit depends on.
+fn is_input_with_gaps(row: &[u8], input: &[u8]) -> bool {
+    let mut want = input.iter();
+    for &b in row {
+        if b == b'-' {
+            continue;
+        }
+        match want.next() {
+            Some(&x) if x == b => {}
+            _ => return false,
+        }
+    }
+    want.next().is_none()
 }
 
 impl std::error::Error for ExternError {}
@@ -80,6 +106,13 @@ impl std::error::Error for ExternError {}
 /// the single sequence unchanged. Gap penalties use KAlign's matrix-tuned
 /// defaults (passing negatives tells `aln_param_init` not to override), and
 /// `n_threads == 1` keeps the result deterministic.
+///
+/// Errors (never a panic across the FFI): [`ExternError::Failed`] when KAlign's
+/// own biotype check rejects the input — notably *pathologically* ambiguous DNA
+/// (≥~half non-ACGT reads as protein under `--type dna`); the caller surfaces it
+/// and the user can fall back to the progressive engine. [`ExternError::OutputMismatch`]
+/// if a returned row isn't the input with gaps inserted (KAlign preserves bytes +
+/// case in practice, so this guards an invariant rather than a known case).
 pub fn kalign_align(seqs: &[&[u8]], alphabet: Alphabet) -> Result<MsaResult, ExternError> {
     match seqs.len() {
         0 => {
@@ -160,6 +193,17 @@ pub fn kalign_align(seqs: &[&[u8]], alphabet: Alphabet) -> Result<MsaResult, Ext
     }
     free_aligned(aligned, seqs.len());
 
+    // Losslessness guard. Our in-place edit (apply_to_dataset resyncs each row's
+    // ungapped residues from the spliced bytes) trusts that every aligned row is the
+    // input with gaps inserted. KAlign preserves input bytes + case in practice, but
+    // if it ever canonicalized a residue (RNA U->T, an ambiguity code, …) the edit
+    // would silently rewrite the user's data — so reject rather than return it.
+    for (row, &input) in rows.iter().zip(seqs.iter()) {
+        if !is_input_with_gaps(row, input) {
+            return Err(ExternError::OutputMismatch);
+        }
+    }
+
     Ok(MsaResult {
         rows,
         length: width,
@@ -226,5 +270,65 @@ mod tests {
         let b = kalign_align(&inputs, Alphabet::Dna).unwrap();
         assert_eq!(a.rows, b.rows);
         assert_eq!(a.length, b.length);
+    }
+
+    // The losslessness invariant the in-place edit depends on must hold across the
+    // residue domain — not just clean uppercase DNA. If KAlign ever canonicalized a
+    // residue (RNA U->T, an ambiguity code, soft-masked lowercase) the guard would
+    // turn this Ok into Err(OutputMismatch), failing loudly instead of corrupting.
+    #[test]
+    fn preserves_residues_across_alphabets() {
+        let cases: [(Alphabet, [&[u8]; 3]); 4] = [
+            // RNA with U.
+            (Alphabet::Rna, [b"ACGUACGU", b"ACGUAACGU", b"ACGUACGU"]),
+            // Protein with X (unknown) and * (stop).
+            (Alphabet::Protein, [b"HEAGAWX", b"HEAGAW", b"HEAGAW*"]),
+            // DNA with realistic (occasional) ambiguity codes (N, R). KAlign's own
+            // biotype detector rejects *pathologically* ambiguous DNA (≥~half
+            // non-ACGT) as mistyped protein — a clean Err(Failed), not corruption —
+            // so keep the ambiguity sparse, like real data.
+            (
+                Alphabet::Dna,
+                [
+                    b"ACGTACGTNACGTACGT",
+                    b"ACGTACGTACGTACGT",
+                    b"ACGTANGTRACGTACGT",
+                ],
+            ),
+            // Soft-masked (lowercase) DNA.
+            (Alphabet::Dna, [b"acgtacgt", b"acgtaacgt", b"acgtacgt"]),
+        ];
+        for (alphabet, inputs) in cases {
+            let r = kalign_align(&inputs, alphabet)
+                .unwrap_or_else(|e| panic!("{alphabet:?} {inputs:?}: {e}"));
+            for (row, inp) in r.rows.iter().zip(inputs.iter()) {
+                let degapped: Vec<u8> = row.iter().filter(|&&b| b != b'-').copied().collect();
+                assert_eq!(
+                    &degapped, inp,
+                    "{alphabet:?}: KAlign must return input + gaps byte-for-byte"
+                );
+            }
+        }
+    }
+
+    // Empty (all-gap) sequences reach KAlign across the FFI (the length==0 skip is one
+    // layer up in commands.rs). Must return cleanly or error — never crash the process.
+    #[test]
+    fn empty_among_nonempty_does_not_crash() {
+        let inputs: [&[u8]; 3] = [b"ACGTACGT", b"", b"ACGTACGT"];
+        // Either a valid lossless MSA or a clean ExternError — just not a segfault.
+        if let Ok(r) = kalign_align(&inputs, Alphabet::Dna) {
+            assert_eq!(r.rows.len(), 3);
+            for (row, inp) in r.rows.iter().zip(inputs.iter()) {
+                let degapped: Vec<u8> = row.iter().filter(|&&b| b != b'-').copied().collect();
+                assert_eq!(&degapped, inp);
+            }
+        }
+    }
+
+    #[test]
+    fn all_empty_does_not_crash() {
+        let inputs: [&[u8]; 2] = [b"", b""];
+        let _ = kalign_align(&inputs, Alphabet::Dna); // Ok or Err, just no crash.
     }
 }
