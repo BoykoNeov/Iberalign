@@ -441,8 +441,39 @@ dependency-light and surface toolchain/linker issues fast.
   must be inserted, **Variant 1** (grow past the selection borders) vs **Variant 2** (align
   within the allocated space, no gap insertion); **user leans Variant 2, maybe choosable**.
   Also future: arbitrary N≥2 / non-adjacent (multi-select; N>2 → MAFFT M6) + Local as a
-  read-only view. MAFFT (M6) remains the agreed next batch. Detail in
-  `docs/plans/m3-{plan,context,tasks}.md`.
+  read-only view. Detail in `docs/plans/m3-{plan,context,tasks}.md`.
+- **Progressive MSA (in-process, N≥2) — code complete + green; all phases COMMITTED;
+  GUI smoke PENDING.** Our own ClustalW-class progressive aligner now backs "Align
+  selected sequences" for **N≥2** — the old "needs MAFFT" warning is GONE (2 rows still
+  route to pairwise; 3+ route to the new MSA). **In-process, no shell** (architecture
+  invariant). **Phase A engine** (`align-core::msa`, `19fca13`): all-pairs global
+  `pairwise` → distance `d = 1 − %id/100` (`i<j` triangle mirrored) → **UPGMA** guide
+  tree fused into the merge loop (deterministic smallest-index-pair tie-break,
+  leaves→root) → `Profile` (equal-width rows + per-column residue counts, each leaf
+  carrying its INPUT index) → profile–profile **3-state Gotoh** DP over columns (M>X>Y
+  ties, affine column gaps, **integer** sum-of-pairs column score; inserting a gap column
+  gaps every row of one profile) → `progressive_align(seqs,&matrix,scoring) ->
+  MsaResult{rows,length}` emitting rows in INPUT order (N=0 empty, N=1 unchanged). Tests:
+  keystone 1×1 byte-exact vs `pairwise`; fidelity/equal-width/input-order/N=0/N=1/one-
+  empty/all-identical/guide-tree-grouping/determinism (9 unit + 2 proptest), plus a
+  **3-seq quality anchor** guarding against over-gapping (`5cf28d2`). **Phase B CLI**
+  (`19fca13`): `align-cli msa <file.fasta> [--matrix --gap-open --gap-extend]` (alphabet
+  widened over ALL records → `default_for`). **Phase C IPC** (`39ee16c`): `realign_splice`
+  generalized to `msa_splice(ds,rows,aligned)` (`target = w` when rows==all else
+  `max(w,cur)`); `msa_align(rows,matrix?,gap_open?,gap_extend?)` validates the row list
+  (in-bounds/sorted/dedup/≥2), widens the alphabet over all rows, degaps, runs
+  `progressive_align`, applies `msa_splice` (reversible N-row splice), skips when
+  `length==0`, returns `MsaResultDto{num_seqs,length}`; `ipc/edit.ts::msaAlign` wrapper.
+  **Phase D UI** (`ed1af00`): `Grid.tsx::doAlign` routes 3+ rows ⇒ `msaAlign(rowList)`,
+  2 rows ⇒ `pairwiseAlign` unchanged, readout `N sequences · L cols`, undo/redo ride the
+  existing `runEdit`+`getRenderBuffer` route; `MenuBar.tsx` Align copy updated (2 ⇒
+  pairwise, 3+ ⇒ progressive MSA), `canAlign = rows>=2`. Like pairwise, **column extent is
+  IGNORED — whole ungapped rows are aligned** (sub-area/block align stays deferred).
+  align-core + iberalign + 295 vitest + clippy + fmt green. **PENDING:** GUI smoke (3+ rows
+  → Align → rows replaced + readout; Ctrl+Z restores; 2 rows still pairwise; DNA vs protein
+  default matrix; column-subset + all-gap-row selections still align). Higher quality later
+  via bundling permissive aligners in-process (KAlign v3 Apache-2.0, POA/`spoa` MIT — the
+  MEGA model) — DEFERRED. Detail in `docs/plans/progressive-msa-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

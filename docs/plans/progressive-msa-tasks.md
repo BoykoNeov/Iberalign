@@ -3,8 +3,9 @@
 Companion to `progressive-msa-plan.md` + `-context.md`. Pure-Rust progressive
 aligner, in-process (no shell), surfaced as "Align selected sequences" for N≥2.
 
-Status: **Phases A–D code complete + green; GUI smoke pending.** Commits:
-`19fca13` (A/B engine+CLI), `39ee16c` (C IPC).
+Status: **Phases A–D code complete + green; all phases COMMITTED; GUI smoke pending.**
+Commits: `19fca13` (A/B engine+CLI), `39ee16c` (C IPC), `ed1af00` (D UI),
+`5cf28d2` (3-seq quality anchor). Docs/memory closed out 2026-06-30 (this commit).
 
 ## Phase A — engine (`align-core::msa`; pure, CI-covered, no smoke) ✅ `19fca13`
 - [x] `msa.rs`: distance matrix — all-pairs global `pairwise`, `d = 1 − %id/100`,
@@ -56,7 +57,8 @@ Status: **Phases A–D code complete + green; GUI smoke pending.** Commits:
       pick the right default matrix; a column-subset selection still aligns the
       whole rows (column extent ignored); a selection incl. an all-gap row still
       aligns (others define width)
-- [ ] update CLAUDE.md milestone status + memory; commit Phase D; push
+- [x] commit Phase D (`ed1af00`) + quality anchor (`5cf28d2`)
+- [x] update CLAUDE.md milestone status + memory; commit + push docs (2026-06-30)
 
 ## Deferred (separate batches)
 - [ ] Bundle permissive external aligners in-process (MEGA model — KAlign v3
