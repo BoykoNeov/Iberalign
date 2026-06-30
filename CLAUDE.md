@@ -452,12 +452,20 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   non-destructive view/report. (2) **Adjacent-only** for now (selection is one rectangle ⇒
   contiguous rows). The Align menu = a single "Align selected sequences" action (disabled
   <2 rows; <2 ⇒ "select 2", 3+ ⇒ "needs MAFFT"); `doAlign` aligns the two WHOLE ungapped
-  rows Global and IGNORES the selection's column extent. **DEFERRED to a future session
-  (design open):** block/sub-area align — when only part of sequences is selected and gaps
-  must be inserted, **Variant 1** (grow past the selection borders) vs **Variant 2** (align
-  within the allocated space, no gap insertion); **user leans Variant 2, maybe choosable**.
-  Also future: arbitrary N≥2 / non-adjacent (multi-select; N>2 → MAFFT M6) + Local as a
-  read-only view. Detail in `docs/plans/m3-{plan,context,tasks}.md`.
+  rows Global and IGNORES the selection's column extent. **Block/sub-area align +
+  non-adjacent multi-select — DESIGN DECIDED 2026-06-30 (design-only session, no code yet;
+  see `docs/plans/block-align-{plan,context,tasks}.md`).** Block align (build next session):
+  a **sub-column** selection (window `[c0,c1]`) re-aligns only the windowed ungapped
+  residues, leaving other cells untouched; a **full-width** selection keeps today's
+  whole-row align (additive — whole-row path stays byte-for-byte unchanged). Width overflow
+  (`wblock > worig`) ⇒ a **choosable `Grow | Fit` toggle, default `Fit`** (Fit packs in
+  place when it fits, else refuses "needs N more cols — widen or Grow"; Grow inserts
+  columns) — **no constrained-width DP, no new `EditCmd`** (Fit = `SetCells`, Grow = mixed
+  `SpliceRows`). Implicit trigger (user's choice over the advisor's explicit-toggle pick;
+  trade-off recorded — reversible to an explicit toggle later). **Non-adjacent / N≥2
+  multi-select is a SEPARATE, explicitly-gated milestone** — the backend already takes
+  `Vec<usize>` (`msa_align`); the cost is the cross-cutting frontend selection rework
+  (copy/cut/delete too). Local stays deferred as a read-only view.
 - **Progressive MSA (in-process, N≥2) — code complete + green; all phases COMMITTED;
   GUI smoke PASSED (2026-06-30).** Our own ClustalW-class progressive aligner now backs "Align
   selected sequences" for **N≥2** — the old "needs MAFFT" warning is GONE (2 rows still
