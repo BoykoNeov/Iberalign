@@ -53,11 +53,23 @@ cargo fmt --all                                 # format (CI checks --check)
 cargo clippy -p align-core -p align-cli --all-targets -- -D warnings
 cargo run -p align-cli -- summary fixtures/sample.fasta
 npm run typecheck && npm run build              # frontend
-npm run tauri dev                               # full app (run from repo root)
+npm run tauri:dev                               # full app — PREFERRED (clears stale state first)
+npm run tauri dev                               # full app, raw (no pre-clean — may hit the hang below)
 ```
 
 Build the engine crates before the Tauri shell when iterating — they're
 dependency-light and surface toolchain/linker issues fast.
+
+**Windows dev-launch hang.** A `tauri dev` stopped uncleanly leaves orphans that
+make the next launch fail or hang at 0% CPU: a stale Vite on **port 1420**
+("Port 1420 is already in use"), a stale `iberalign.exe` holding the
+`target\debug\iberalign.exe` lock, or an orphaned `cargo` holding the artifact-dir
+lock ("Blocking waiting for file lock"). The 0%-CPU stall is a LOCK, not a slow
+linker. Fix: **use `npm run tauri:dev`** (or `npm run tauri:kalign`) — both run
+`scripts/dev-clean.ps1` first to free port 1420 + kill stale `iberalign.exe`/`cargo`
+(surgical: only the port-1420 owner + those image names; never node broadly). For a
+cold-launch stall (no orphans), exclude `target\` from Defender:
+`Add-MpPreference -ExclusionPath "M:\claud_projects\IberPrime\target"` (run elevated).
 
 ## Conventions
 
@@ -447,7 +459,7 @@ dependency-light and surface toolchain/linker issues fast.
   Also future: arbitrary N≥2 / non-adjacent (multi-select; N>2 → MAFFT M6) + Local as a
   read-only view. Detail in `docs/plans/m3-{plan,context,tasks}.md`.
 - **Progressive MSA (in-process, N≥2) — code complete + green; all phases COMMITTED;
-  GUI smoke PENDING.** Our own ClustalW-class progressive aligner now backs "Align
+  GUI smoke PASSED (2026-06-30).** Our own ClustalW-class progressive aligner now backs "Align
   selected sequences" for **N≥2** — the old "needs MAFFT" warning is GONE (2 rows still
   route to pairwise; 3+ route to the new MSA). **In-process, no shell** (architecture
   invariant). **Phase A engine** (`align-core::msa`, `19fca13`): all-pairs global
@@ -473,9 +485,13 @@ dependency-light and surface toolchain/linker issues fast.
   existing `runEdit`+`getRenderBuffer` route; `MenuBar.tsx` Align copy updated (2 ⇒
   pairwise, 3+ ⇒ progressive MSA), `canAlign = rows>=2`. Like pairwise, **column extent is
   IGNORED — whole ungapped rows are aligned** (sub-area/block align stays deferred).
-  align-core + iberalign + 295 vitest + clippy + fmt green. **PENDING:** GUI smoke (3+ rows
-  → Align → rows replaced + readout; Ctrl+Z restores; 2 rows still pairwise; DNA vs protein
-  default matrix; column-subset + all-gap-row selections still align). Higher quality later
+  align-core + iberalign + 295 vitest + clippy + fmt green. **GUI smoke PASSED (2026-06-30,
+  user "all work"):** steps 1–5 confirmed (3+ DNA → rows replaced + `N sequences · L cols`
+  readout; Ctrl+Z restores; 2 rows still pairwise; protein picks the right default matrix;
+  column-subset selection aligns whole rows). Step 6 (all-gap row in selection) NOT
+  GUI-exercised (no all-gap row in the fixture) but **engine-covered by the `one-empty` unit
+  test** (all-gap row degaps to empty → `progressive_align` emits it gapped to consensus
+  width). Smoke fixtures: `fixtures/smoke-msa-{dna,protein}.fasta`. Higher quality later
   via bundling permissive aligners in-process (KAlign v3 Apache-2.0, POA/`spoa` MIT — the
   MEGA model). Detail in `docs/plans/progressive-msa-{plan,context,tasks}.md`.
 - **In-process KAlign v3 backend (compiled-in quality engine) — code complete + green;

@@ -3,7 +3,7 @@
 Companion to `progressive-msa-plan.md` + `-context.md`. Pure-Rust progressive
 aligner, in-process (no shell), surfaced as "Align selected sequences" for N≥2.
 
-Status: **Phases A–D code complete + green; all phases COMMITTED; GUI smoke pending.**
+Status: **Phases A–D code complete + green; all phases COMMITTED; GUI smoke PASSED 2026-06-30.**
 Commits: `19fca13` (A/B engine+CLI), `39ee16c` (C IPC), `ed1af00` (D UI),
 `5cf28d2` (3-seq quality anchor). Docs/memory closed out 2026-06-30 (this commit).
 
@@ -52,11 +52,14 @@ Commits: `19fca13` (A/B engine+CLI), `39ee16c` (C IPC), `ed1af00` (D UI),
 - [x] `MenuBar.tsx`: Align item copy updated (2 ⇒ pairwise, 3+ ⇒ progressive MSA);
       `canAlign = rows>=2`; "needs MAFFT" copy removed
 - [x] typecheck + 295 vitest + build green
-- [ ] **GUI smoke**: select 3+ rows → Align → rows replaced by the MSA, readout
-      shows count/cols; `Ctrl/⌘+Z` restores; 2 rows still pairwise; protein vs DNA
-      pick the right default matrix; a column-subset selection still aligns the
-      whole rows (column extent ignored); a selection incl. an all-gap row still
-      aligns (others define width)
+- [x] **GUI smoke PASSED (2026-06-30, user "all work")**: steps 1–5 confirmed —
+      3+ rows → Align → rows replaced + count/cols readout; `Ctrl/⌘+Z` restores;
+      2 rows still pairwise; protein vs DNA pick the right default matrix; a
+      column-subset selection still aligns the whole rows (column extent ignored).
+      Step 6 (selection incl. an all-gap row) NOT GUI-exercised — no all-gap row in
+      the fixture — but **engine-covered by the `one-empty` unit test** (all-gap row
+      degaps to empty → `progressive_align` emits it gapped to the consensus width).
+      Fixtures: `fixtures/smoke-msa-{dna,protein}.fasta`.
 - [x] commit Phase D (`ed1af00`) + quality anchor (`5cf28d2`)
 - [x] update CLAUDE.md milestone status + memory; commit + push docs (2026-06-30)
 
