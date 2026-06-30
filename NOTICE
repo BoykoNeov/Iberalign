@@ -18,11 +18,17 @@ Third-party components (permissive, redistributed as part of the build):
   - React (MIT), Vite (MIT)                 — frontend
 
 ------------------------------------------------------------------------------
-External alignment tools are NOT bundled or linked. Iberalign detects and
-invokes them as separate processes only when the user has installed them:
-  - MAFFT          (BSD-like)  — default MSA engine, safe to bundle later
-  - MUSCLE v5      (GPL)       — invoke-only; never linked or redistributed
-  - Clustal Omega  (GPL)       — invoke-only; never linked or redistributed
+Bundled (compiled-in) alignment engine:
+  - KAlign v3.5.1 (Apache-2.0) — Timo Lassmann, https://github.com/TimoLassmann/kalign
+    Vendored as a git submodule at crates/align-extern/vendor/kalign and compiled
+    into the application in-process via the `align-extern` crate's `kalign` feature
+    (the higher-quality "KAlign" option in Align → Engine). Its full Apache-2.0
+    license text is retained at crates/align-extern/vendor/kalign/COPYING.
+    The default build does NOT include it (feature off ⇒ pure-Rust, no submodule).
 
-Keeping GPL tools as separate, user-installed processes keeps Iberalign's own
-code under a non-GPL license. See iberprime-spec.md §11.
+------------------------------------------------------------------------------
+GPL alignment tools (MUSCLE v5, Clustal Omega) are NOT bundled or linked. If
+ever integrated they would only be detected and invoked as separate,
+user-installed processes — keeping Iberalign's own code under a non-GPL license.
+Phylogenetic tree tools (FastTree/IQ-TREE) likewise remain separate processes.
+See iberprime-spec.md §11.

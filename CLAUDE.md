@@ -19,10 +19,14 @@ non-trivial change. This file is the short list of things to get right.
   try to reimplement MAFFT. Our own *progressive* aligner (ClustalW-class:
   all-pairs distance → UPGMA → profile–profile Gotoh) lives in `align-core::msa`,
   built on the hand-written *pairwise* NW/SW (Gotoh affine) in `align-core::align`.
-  Higher quality comes **later** from bundling *permissively licensed* aligners
-  **in-process** (compiled-in/FFI — the MEGA model: KAlign v3 Apache-2.0, POA/
-  `spoa` MIT), never from a subprocess. Phylogenetic **trees** still shell out to
-  FastTree/IQ-TREE (separate concern; unchanged).
+  Higher quality comes from bundling *permissively licensed* aligners
+  **in-process** (compiled-in/FFI — the MEGA model), never from a subprocess.
+  **This is now real: KAlign v3 (Apache-2.0) is compiled-in** as a selectable
+  second backend (Align → Engine: Progressive | KAlign). **The FFI lives in a
+  separate feature-gated crate `align-extern` — `align-core` stays pure and
+  FFI-free.** The `kalign` feature is OFF by default (default builds + CI stay
+  pure-Rust, no submodule / C toolchain); a dedicated Windows CI job covers it.
+  Phylogenetic **trees** still shell out to FastTree/IQ-TREE (separate concern).
 - **Three coordinate spaces, never conflated:** ungapped position ↔ alignment
   column ↔ screen pixel. Mapping lives in `align-core::coords`; the round-trip
   invariant is property-tested. Features anchor to *ungapped* positions and
@@ -473,7 +477,39 @@ dependency-light and surface toolchain/linker issues fast.
   → Align → rows replaced + readout; Ctrl+Z restores; 2 rows still pairwise; DNA vs protein
   default matrix; column-subset + all-gap-row selections still align). Higher quality later
   via bundling permissive aligners in-process (KAlign v3 Apache-2.0, POA/`spoa` MIT — the
-  MEGA model) — DEFERRED. Detail in `docs/plans/progressive-msa-{plan,context,tasks}.md`.
+  MEGA model). Detail in `docs/plans/progressive-msa-{plan,context,tasks}.md`.
+- **In-process KAlign v3 backend (compiled-in quality engine) — code complete + green;
+  Phases 0/C/A/D committed + pushed; GUI smoke PENDING.** KAlign v3.5.1 (Apache-2.0,
+  ≈MUSCLE/Clustal) is now a selectable second MSA backend alongside the progressive
+  aligner (**Align → Engine: Progressive | KAlign**). **`align-core` stays pure** — all
+  FFI lives in the new feature-gated crate **`crates/align-extern`**; the `kalign` feature
+  is OFF by default so default builds + CI stay pure-Rust (no submodule / C toolchain).
+  **Phase 0 spike (GO):** KAlign builds under MSVC 2022 via the **`cc` crate (no CMake —
+  it isn't installed and we don't force it on contributors/CI)**; minimal contained shims,
+  ZERO upstream patches (exclude `msa_cmp.c` — its lone VLA is the only blocker and the
+  `kalign()` align path never calls it). **Phase C (`28e0521`):** KAlign vendored as a git
+  submodule pinned to **v3.5.1** under `crates/align-extern/vendor/kalign`; `build.rs`
+  compiles the 35-file source list + force-includes `shim/kalign_compat.h` (MSVC compat) +
+  stub POSIX/intrinsic headers; safe wrapper `align_extern::kalign_align(seqs, alphabet)
+  -> Result<MsaResult, ExternError>` (legacy `kalign()` entry; v3.5.1 `KALIGN_TYPE_*`
+  **DNA=0/RNA=2/PROTEIN=3** — differ from `main`!; `n_threads=1` deterministic; negative
+  gaps ⇒ KAlign's tuned defaults; frees the malloc'd `char***`). Verified: input-order
+  preserved, deterministic, **case-preserved** (soft-masking), debug+release link clean.
+  **Phase A (`897c31e`):** pure `align_core::MsaEngine { Progressive, Kalign }`; `msa_align`
+  command + `align-cli msa --engine` dispatch (both gain an optional `align-extern` dep
+  behind a `kalign` feature; selecting kalign without it ⇒ clear "not built" error).
+  **Phase D (`0738d7e`):** `ipc/edit.ts::msaAlign` engine arg; `Grid.tsx` engine state/ref
+  + `doAlign` dispatch (2-row pairwise keeps its score readout under Progressive; KAlign
+  aligns N≥2 uniformly); `MenuBar` Align → Engine submenu; **`npm run tauri:kalign`** /
+  `tauri:build:kalign` scripts (the GUI needs `--features kalign` to use KAlign). **Phase E:**
+  dedicated **Windows CI job** builds/tests `align-extern --features kalign` (submodule
+  checkout); root **NOTICE** attributes KAlign (Apache-2.0). **Default stays Progressive**
+  until the KAlign GUI smoke passes; flip to KAlign default + decide release-shipping
+  (kalign-on release build) as a follow-up. **PENDING GUI smoke:** `npm run tauri:kalign`
+  → select 3+ rows → Align (Engine=KAlign) → rows replaced + "· KAlign" readout; Ctrl+Z
+  restores; switch to Progressive still works; 2 rows pairwise; DNA vs protein. **Deferred:**
+  pure-Rust POA (dropped per user — build proven so the seam-prover was redundant); block/
+  sub-area align. Detail in `docs/plans/extern-aligner-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

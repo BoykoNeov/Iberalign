@@ -66,3 +66,27 @@ jobs:
 
       - name: Test workspace
         run: cargo test --workspace
+
+  kalign:
+    name: KAlign backend (Windows, --features kalign)
+    runs-on: windows-latest
+    steps:
+      # The compiled-in KAlign backend needs its vendored submodule + MSVC
+      # (preinstalled on windows-latest; the `cc` crate finds cl.exe via vswhere).
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (align-extern, kalign)
+        run: cargo clippy -p align-extern --features kalign --all-targets -- -D warnings
+
+      - name: Test (align-extern, kalign — builds + runs the FFI)
+        run: cargo test -p align-extern --features kalign
+
+      - name: Build CLI with KAlign
+        run: cargo build -p align-cli --features kalign
