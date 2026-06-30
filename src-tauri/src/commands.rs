@@ -4,8 +4,8 @@
 
 use crate::state::AppState;
 use align_core::{
-    pairwise, progressive_align, AlignMode, Alphabet, CellWrite, Dataset, EditCmd, RawRecord,
-    RowData, RowSplice, Scoring, SeqId, SubstitutionMatrix,
+    pairwise, progressive_align, AlignMode, Alphabet, CellWrite, Dataset, EditCmd, MsaEngine,
+    RawRecord, RowData, RowSplice, Scoring, SeqId, SubstitutionMatrix,
 };
 use serde::Serialize;
 use std::sync::Mutex;
@@ -1003,6 +1003,7 @@ fn msa_splice(ds: &Dataset, rows: &[usize], aligned: &[Vec<u8>]) -> EditCmd {
 #[tauri::command]
 pub async fn msa_align(
     rows: Vec<usize>,
+    engine: Option<String>,
     matrix: Option<String>,
     gap_open: Option<i32>,
     gap_extend: Option<i32>,
@@ -1046,13 +1047,41 @@ pub async fn msa_align(
         gap_extend: gap_extend.unwrap_or(defaults.gap_extend),
     };
 
+    // Pick the backend (default progressive). Every engine returns an MsaResult,
+    // so the row-splice below is backend-agnostic.
+    let engine = match &engine {
+        Some(name) => {
+            MsaEngine::from_name(name).ok_or_else(|| format!("unknown align engine '{name}'"))?
+        }
+        None => MsaEngine::Progressive,
+    };
+
     // Align the ungapped residues (a fresh MSA ignores any prior gaps in the rows).
     let seqs: Vec<Vec<u8>> = rows
         .iter()
         .map(|&r| ds.sequences[r].residues.clone())
         .collect();
     let refs: Vec<&[u8]> = seqs.iter().map(|v| v.as_slice()).collect();
-    let result = progressive_align(&refs, &matrix, scoring);
+    let result = match engine {
+        MsaEngine::Progressive => progressive_align(&refs, &matrix, scoring),
+        MsaEngine::Kalign => {
+            // KAlign uses its own matrix-tuned defaults (alphabet picks the type);
+            // our `matrix`/`scoring` apply only to the progressive backend.
+            #[cfg(feature = "kalign")]
+            {
+                align_extern::kalign_align(&refs, alphabet).map_err(|e| e.to_string())?
+            }
+            #[cfg(not(feature = "kalign"))]
+            {
+                let _ = (&refs, alphabet, &matrix, scoring);
+                return Err(
+                    "the KAlign engine is not built into this binary (rebuild with \
+                     --features kalign)"
+                        .to_string(),
+                );
+            }
+        }
+    };
 
     // Every selected row all-gap ⇒ width 0 — skip the edit (don't wipe the rows to
     // nothing) and let the caller report it.

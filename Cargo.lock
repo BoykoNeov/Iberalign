@@ -22,6 +22,7 @@ name = "align-cli"
 version = "0.1.0"
 dependencies = [
  "align-core",
+ "align-extern",
 ]
 
 [[package]]
@@ -1455,6 +1456,7 @@ name = "iberalign"
 version = "0.1.0"
 dependencies = [
  "align-core",
+ "align-extern",
  "serde",
  "serde_json",
  "tauri",

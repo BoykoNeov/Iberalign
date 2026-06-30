@@ -257,6 +257,7 @@ fn all_sequences(path: &str) -> Result<Vec<(String, Vec<u8>)>, String> {
 /// of the MSA engine.
 fn msa_cmd(args: &[String]) -> ExitCode {
     let mut files: Vec<&str> = Vec::new();
+    let mut engine_name: Option<String> = None;
     let mut matrix_name: Option<String> = None;
     let mut gap_open: Option<i32> = None;
     let mut gap_extend: Option<i32> = None;
@@ -264,6 +265,16 @@ fn msa_cmd(args: &[String]) -> ExitCode {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--engine" => match args.get(i + 1) {
+                Some(n) => {
+                    engine_name = Some(n.clone());
+                    i += 2;
+                }
+                None => {
+                    eprintln!("error: --engine expects a name (progressive|kalign)");
+                    return ExitCode::FAILURE;
+                }
+            },
             "--matrix" => match args.get(i + 1) {
                 Some(n) => {
                     matrix_name = Some(n.clone());
@@ -307,7 +318,7 @@ fn msa_cmd(args: &[String]) -> ExitCode {
 
     if files.len() != 1 {
         eprintln!(
-            "usage: iberalign-cli msa <file.fasta> \
+            "usage: iberalign-cli msa <file.fasta> [--engine progressive|kalign] \
              [--matrix blosum62|blosum45|blosum80|pam250|dna] [--gap-open N] [--gap-extend N]"
         );
         return ExitCode::FAILURE;
@@ -345,13 +356,51 @@ fn msa_cmd(args: &[String]) -> ExitCode {
         gap_extend: gap_extend.unwrap_or(defaults.gap_extend),
     };
 
+    let engine = match &engine_name {
+        Some(n) => match align_core::MsaEngine::from_name(n) {
+            Some(e) => e,
+            None => {
+                eprintln!("error: unknown engine '{n}' (try progressive|kalign)");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => align_core::MsaEngine::Progressive,
+    };
+
     let refs: Vec<&[u8]> = seqs.iter().map(|(_, r)| r.as_slice()).collect();
-    let res = align_core::progressive_align(&refs, &matrix, scoring);
+    let res = match engine {
+        align_core::MsaEngine::Progressive => {
+            align_core::progressive_align(&refs, &matrix, scoring)
+        }
+        align_core::MsaEngine::Kalign => {
+            // KAlign uses its own tuned defaults; `--matrix`/`--gap-*` apply only
+            // to the progressive backend.
+            #[cfg(feature = "kalign")]
+            {
+                match align_extern::kalign_align(&refs, alphabet) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            #[cfg(not(feature = "kalign"))]
+            {
+                eprintln!(
+                    "error: the KAlign engine is not built (rebuild align-cli \
+                     with --features kalign)"
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    };
 
     eprintln!(
-        "aligned {} sequences ({}) to width {}",
+        "aligned {} sequences ({}) via {} to width {}",
         seqs.len(),
         alphabet.label(),
+        engine.as_str(),
         res.length
     );
     for ((name, _), row) in seqs.iter().zip(&res.rows) {

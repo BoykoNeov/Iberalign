@@ -32,7 +32,7 @@ pub use edit::{
 };
 pub use matrix::SubstitutionMatrix;
 pub use model::{AlignedRow, Alignment, Alphabet, Dataset, RawRecord, SeqId, Sequence};
-pub use msa::{progressive_align, MsaResult};
+pub use msa::{progressive_align, MsaEngine, MsaResult};
 pub use parse::{
     parse_fasta, parse_fasta_with, summarize, ParseError, ParseOptions, ParseOutcome, Summary,
 };

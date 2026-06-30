@@ -12,5 +12,12 @@ description = "Headless CLI over align-core — a scriptable integration harness
 name = "iberalign-cli"
 path = "src/main.rs"
 
+[features]
+default = []
+# Enable the in-process KAlign v3 backend for `msa --engine kalign`.
+# Needs the crates/align-extern/vendor/kalign submodule + a C toolchain (MSVC).
+kalign = ["dep:align-extern", "align-extern/kalign"]
+
 [dependencies]
 align-core.workspace = true
+align-extern = { workspace = true, optional = true }

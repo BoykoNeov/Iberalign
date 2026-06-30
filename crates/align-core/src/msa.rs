@@ -53,6 +53,46 @@ pub struct MsaResult {
     pub length: usize,
 }
 
+/// Which multiple-alignment backend to run for N≥2 sequences.
+///
+/// The engine is chosen at the IPC/CLI boundary. Every backend returns an
+/// [`MsaResult`] (equal-width gapped rows in input order), so the reversible
+/// row-splice edit downstream stays backend-agnostic. This enum is a pure value
+/// type — the actual backends live in their own crates (`align-extern` carries
+/// the compiled-in FFI ones); `align-core` only names them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MsaEngine {
+    /// Our in-process ClustalW-class progressive aligner ([`progressive_align`]).
+    /// Always available; the default and zero-dependency fallback.
+    #[default]
+    Progressive,
+    /// Vendored KAlign v3 (Apache-2.0), compiled in via `align-extern`'s `kalign`
+    /// feature — MUSCLE/Clustal-tier quality. Selecting it errors at the dispatch
+    /// boundary when that feature is not built.
+    Kalign,
+}
+
+impl MsaEngine {
+    /// Parse a stable lowercase engine id (`"progressive"` | `"kalign"`); `None`
+    /// if unknown. Callers handling absent input should default to
+    /// [`MsaEngine::Progressive`].
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "progressive" => Some(Self::Progressive),
+            "kalign" => Some(Self::Kalign),
+            _ => None,
+        }
+    }
+
+    /// The stable lowercase id used on the IPC/CLI boundary.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Progressive => "progressive",
+            Self::Kalign => "kalign",
+        }
+    }
+}
+
 /// One aligned row inside a profile, tagged with its original input index so the
 /// final MSA can be emitted in input order regardless of guide-tree shuffling.
 #[derive(Clone)]
@@ -573,5 +613,15 @@ mod tests {
         let seqs: Vec<&[u8]> = vec![b"HEAGAWGHEE", b"PAWHEAE", b"HEAGAWGHE"];
         let res = progressive_align(&seqs, &matrix, scoring);
         assert_msa(&seqs, &res);
+    }
+
+    #[test]
+    fn engine_name_round_trip() {
+        for e in [MsaEngine::Progressive, MsaEngine::Kalign] {
+            assert_eq!(MsaEngine::from_name(e.as_str()), Some(e));
+        }
+        assert_eq!(MsaEngine::default(), MsaEngine::Progressive);
+        assert_eq!(MsaEngine::from_name("mafft"), None);
+        assert_eq!(MsaEngine::from_name(""), None);
     }
 }
