@@ -70,7 +70,7 @@ import {
 } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
 import { residueForKey } from "../model/typing";
-import type { PasteMode, CutMode, DeleteMode, TypeMode } from "./MenuBar";
+import type { PasteMode, CutMode, DeleteMode, TypeMode, AlignEngine } from "./MenuBar";
 import ConsensusDialog from "./ConsensusDialog";
 import { defaultConfigFor, type ConsensusConfig } from "../model/consensus";
 import { ColumnData } from "../model/columnData";
@@ -211,6 +211,12 @@ export default function Grid({ view, onResized }: GridProps) {
   // above. The Insert key toggles it (the text-editor convention).
   const [typeMode, setTypeMode] = useState<TypeMode>("replace");
   const typeModeRef = useRef<TypeMode>("replace");
+  // MSA backend for Align (Align → Engine), default `progressive` — our built-in
+  // aligner, always available. `kalign` routes to the compiled-in KAlign v3 (only
+  // present in a `--features kalign` build; the command returns a clear error
+  // otherwise). The ref shadows it for the effect-scoped `doAlign`, like the modes.
+  const [alignEngine, setAlignEngine] = useState<AlignEngine>("progressive");
+  const alignEngineRef = useRef<AlignEngine>("progressive");
   // Consensus options (Phase 3). `consensusConfig === null` means "follow the
   // alphabet default" — the back-compat track behavior; a config is the user's
   // dialog override, applied LIVE (an effect pushes it to the track renderer +
@@ -409,6 +415,13 @@ export default function Grid({ view, onResized }: GridProps) {
   const handleSetTypeMode = useCallback((mode: TypeMode) => {
     typeModeRef.current = mode;
     setTypeMode(mode);
+  }, []);
+
+  // Pick the MSA backend (Progressive | KAlign) from the menu bar; mirror into the
+  // ref the effect-scoped `doAlign` reads.
+  const handleSetAlignEngine = useCallback((engine: AlignEngine) => {
+    alignEngineRef.current = engine;
+    setAlignEngine(engine);
   }, []);
 
   // Menu bar Del Rows / Del Cols buttons → the effect-scoped structural deletes.
@@ -1004,7 +1017,11 @@ export default function Grid({ view, onResized }: GridProps) {
         showMsg("Select 2+ sequences to align", "warn");
         return;
       }
-      if (rows === 2) {
+      const engine = alignEngineRef.current;
+      // Exactly 2 rows under the progressive engine ⇒ the optimal pairwise Gotoh,
+      // which also yields a score/%identity readout. KAlign has no pairwise score
+      // and aligns N≥2 uniformly, so it (and every 3+ case) goes through the MSA path.
+      if (rows === 2 && engine === "progressive") {
         let result: PairwiseResult | null = null;
         const ok = await runEdit(async () => {
           result = await pairwiseAlign(r0, r1, "global");
@@ -1025,11 +1042,11 @@ export default function Grid({ view, onResized }: GridProps) {
         }
         return;
       }
-      // 3+ rows: progressive MSA over the contiguous selected rows.
+      // N≥2 via the selected MSA engine over the contiguous selected rows.
       const rowList = Array.from({ length: rows }, (_, i) => r0 + i);
       let result: MsaResult | null = null;
       const ok = await runEdit(async () => {
-        result = await msaAlign(rowList);
+        result = await msaAlign(rowList, engine);
         return await getRenderBuffer();
       });
       if (ok && result) {
@@ -1038,7 +1055,8 @@ export default function Grid({ view, onResized }: GridProps) {
           showMsg("Nothing to align (all selected sequences are empty)", "warn");
           return;
         }
-        showMsg(`Aligned ${r.numSeqs} sequences · ${r.length} cols`);
+        const via = engine === "kalign" ? " · KAlign" : "";
+        showMsg(`Aligned ${r.numSeqs} sequences · ${r.length} cols${via}`);
       }
     };
     doAlignRef.current = doAlign;
@@ -1743,6 +1761,8 @@ export default function Grid({ view, onResized }: GridProps) {
         onCut={handleCut}
         canAlign={(selInfo?.rows ?? 0) >= 2}
         onAlign={handleAlign}
+        alignEngine={alignEngine}
+        onSetAlignEngine={handleSetAlignEngine}
         onOpenConsensus={openConsensus}
         schemes={SCHEMES}
         schemeId={schemeId}

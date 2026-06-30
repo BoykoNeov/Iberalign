@@ -51,6 +51,11 @@ export type DeleteMode = "shorten" | "mask";
  *  Toggled by the menu or the Insert key. */
 export type TypeMode = "replace" | "insert";
 
+/** MSA backend for Align (3+ rows, and 2 rows when KAlign is chosen): `progressive`
+ *  (default) is our built-in ClustalW-class aligner; `kalign` is the bundled,
+ *  compiled-in KAlign v3 (higher quality, only present in a `--features kalign` build). */
+export type AlignEngine = "progressive" | "kalign";
+
 // Modifier label for accelerators — ⌘ on macOS, Ctrl elsewhere (win32 here).
 const IS_MAC =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -98,6 +103,9 @@ interface MenuBarProps {
    *  a non-destructive view in a later milestone. */
   canAlign: boolean;
   onAlign: () => void;
+  /** The active MSA backend (the Align → Engine submenu). */
+  alignEngine: AlignEngine;
+  onSetAlignEngine: (engine: AlignEngine) => void;
   /** Open the consensus & coloring options modal. */
   onOpenConsensus: () => void;
   /** The selectable color schemes + the active one's id (the View scheme picker). */
@@ -174,6 +182,8 @@ export default function MenuBar(props: MenuBarProps) {
     onCut,
     canAlign,
     onAlign,
+    alignEngine,
+    onSetAlignEngine,
     onOpenConsensus,
     schemes,
     schemeId,
@@ -327,6 +337,26 @@ export default function MenuBar(props: MenuBarProps) {
           label: "Align selected sequences",
           disabled: !canAlign,
           onClick: onAlign,
+        },
+        { kind: "sep", key: "as1" },
+        {
+          kind: "submenu",
+          key: "engine",
+          label: "Engine",
+          value: alignEngine,
+          onSelect: (v) => onSetAlignEngine(v as AlignEngine),
+          options: [
+            {
+              value: "progressive",
+              label: "Progressive",
+              title: "Built-in ClustalW-class aligner — fast, no dependencies",
+            },
+            {
+              value: "kalign",
+              label: "KAlign",
+              title: "Bundled KAlign v3 — higher quality (MUSCLE/Clustal-tier)",
+            },
+          ],
         },
       ],
     },

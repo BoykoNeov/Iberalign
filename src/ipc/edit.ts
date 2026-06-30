@@ -193,12 +193,14 @@ interface MsaResultWire {
  */
 export async function msaAlign(
   rows: number[],
+  engine?: string,
   matrix?: string,
   gapOpen?: number,
   gapExtend?: number,
 ): Promise<MsaResult> {
   const wire = await invoke<MsaResultWire>("msa_align", {
     rows,
+    engine: engine ?? null,
     matrix: matrix ?? null,
     gapOpen: gapOpen ?? null,
     gapExtend: gapExtend ?? null,
