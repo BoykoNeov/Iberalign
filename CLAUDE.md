@@ -503,7 +503,8 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   via bundling permissive aligners in-process (KAlign v3 Apache-2.0, POA/`spoa` MIT — the
   MEGA model). Detail in `docs/plans/progressive-msa-{plan,context,tasks}.md`.
 - **In-process KAlign v3 backend (compiled-in quality engine) — code complete + green;
-  Phases 0/C/A/D committed + pushed; GUI smoke PENDING.** KAlign v3.5.1 (Apache-2.0,
+  Phases 0/C/A/D/E committed + pushed; GUI smoke PASSED (2026-07-01, user "all works").**
+  KAlign v3.5.1 (Apache-2.0,
   ≈MUSCLE/Clustal) is now a selectable second MSA backend alongside the progressive
   aligner (**Align → Engine: Progressive | KAlign**). **`align-core` stays pure** — all
   FFI lives in the new feature-gated crate **`crates/align-extern`**; the `kalign` feature
@@ -527,13 +528,15 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   aligns N≥2 uniformly); `MenuBar` Align → Engine submenu; **`npm run tauri:kalign`** /
   `tauri:build:kalign` scripts (the GUI needs `--features kalign` to use KAlign). **Phase E:**
   dedicated **Windows CI job** builds/tests `align-extern --features kalign` (submodule
-  checkout); root **NOTICE** attributes KAlign (Apache-2.0). **Default stays Progressive**
-  until the KAlign GUI smoke passes; flip to KAlign default + decide release-shipping
-  (kalign-on release build) as a follow-up. **PENDING GUI smoke:** `npm run tauri:kalign`
-  → select 3+ rows → Align (Engine=KAlign) → rows replaced + "· KAlign" readout; Ctrl+Z
-  restores; switch to Progressive still works; 2 rows pairwise; DNA vs protein. **Deferred:**
-  pure-Rust POA (dropped per user — build proven so the seam-prover was redundant); block/
-  sub-area align. Detail in `docs/plans/extern-aligner-{plan,context,tasks}.md`.
+  checkout); root **NOTICE** attributes KAlign (Apache-2.0). **GUI smoke PASSED (2026-07-01,
+  user "all works")** via `npm run tauri:kalign` (align triggers on the Align action, not on
+  the Engine radio — a first-run gotcha the user hit: switching engines doesn't align; you
+  must click "Align selected sequences"). The carry-over smokes (keyboard nucleotide entry
+  Replace/Insert + strict-IUPAC consensus track) also PASSED this session. **Default still
+  Progressive** — the remaining follow-up is a decision, not a smoke: flip the default to
+  KAlign + decide release-shipping (kalign-on release build). **Deferred:** pure-Rust POA
+  (dropped per user — build proven so the seam-prover was redundant); block/sub-area align.
+  Detail in `docs/plans/extern-aligner-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

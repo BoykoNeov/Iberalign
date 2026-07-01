@@ -1,7 +1,9 @@
 # In-process KAlign v3 backend — task checklist
 
 Companion to `extern-aligner-plan.md` (accepted plan + Phase 0 spike results).
-Status: **Phases 0/C/A/D/E code complete + committed + pushed; GUI smoke PENDING.**
+Status: **Phases 0/C/A/D/E code complete + committed + pushed; GUI smoke PASSED
+(2026-07-01, user "all works"). Batch CLOSED — only the default-flip/release decision
+remains (see Deferred).**
 
 ## Phase 0 — build spike (GO/NO-GO) ✅ GO
 - [x] Vendor KAlign v3.5.1, build static lib under MSVC via the `cc` crate (no CMake)
@@ -44,9 +46,12 @@ Status: **Phases 0/C/A/D/E code complete + committed + pushed; GUI smoke PENDING
       ambiguity. CI green (incl. kalign job, twice).
 
 ## PENDING (user-driven)
-- [ ] **GUI smoke**: `npm run tauri:kalign` → 3+ rows → Align (Engine=KAlign) → rows
-      replaced + "· KAlign" readout; Ctrl+Z restores; Progressive still works; 2 rows
-      pairwise; DNA vs protein default type; column-subset + all-gap-row still align.
+- [x] **GUI smoke PASSED (2026-07-01, user "all works")**: `npm run tauri:kalign` → 3+
+      rows → Align (Engine=KAlign) → rows replaced + "· KAlign" readout; Ctrl+Z restores;
+      Progressive still works; 2 rows pairwise; DNA vs protein default type. **Gotcha the
+      user hit:** switching the Engine radio does NOT trigger alignment — you must click
+      the "Align selected sequences" action (the radio only picks the backend). Verified
+      via a temp `console.log` in `doAlign` (Vite HMR, no Rust rebuild), then reverted.
 
 ## Deferred / follow-ups
 - [ ] Flip GUI default to KAlign + decide RELEASE shipping (kalign-on release build,
