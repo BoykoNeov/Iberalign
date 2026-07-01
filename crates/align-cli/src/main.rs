@@ -4,6 +4,7 @@
 //!   iberalign-cli summary <file.fasta>          # print a load summary
 //!   iberalign-cli composition <file.fasta>      # print composition stats
 //!   iberalign-cli generate <rows> <cols> <out>  # write a synthetic FASTA
+//!   iberalign-cli translate <file.fasta>        # translate to protein
 //!   cat file.fasta | iberalign-cli summary -
 //!
 //! Exists so the full parse → analyze → export path can be exercised in CI
@@ -32,6 +33,7 @@ fn main() -> ExitCode {
         Some("generate") => generate(&args[1..]),
         Some("align") => align_cmd(&args[1..]),
         Some("msa") => msa_cmd(&args[1..]),
+        Some("translate") => translate_cmd(&args[1..]),
         Some(other) => {
             eprintln!("error: unknown subcommand '{other}'");
             usage();
@@ -410,6 +412,105 @@ fn msa_cmd(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `translate <file.fasta> [--mode degap|codon] [--code N]`
+///
+/// Translates **every** sequence in the file to protein under a genetic code
+/// (default NCBI table 1, Standard) and prints the result as FASTA. `--mode
+/// degap` (default) strips gaps then reads codons per sequence; `--mode codon`
+/// reads codons through the alignment columns (all-gap codon → `-`, a codon
+/// spanning a gap → `X`, keeping 1:3 column correspondence). The headless
+/// exercise of the translate engine.
+fn translate_cmd(args: &[String]) -> ExitCode {
+    let mut files: Vec<&str> = Vec::new();
+    let mut mode = align_core::TranslateMode::Degap;
+    let mut code_id: u8 = 1;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--mode" => {
+                match args.get(i + 1).map(String::as_str) {
+                    Some("degap") => mode = align_core::TranslateMode::Degap,
+                    Some("codon") => mode = align_core::TranslateMode::CodonThrough,
+                    _ => {
+                        eprintln!("error: --mode expects 'degap' or 'codon'");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
+            }
+            "--code" => match args.get(i + 1).map(|s| s.parse::<u8>()) {
+                Some(Ok(v)) => {
+                    code_id = v;
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("error: --code expects an integer table id");
+                    return ExitCode::FAILURE;
+                }
+            },
+            s if s.starts_with("--") => {
+                eprintln!("error: unknown flag '{s}'");
+                return ExitCode::FAILURE;
+            }
+            s => {
+                files.push(s);
+                i += 1;
+            }
+        }
+    }
+
+    if files.len() != 1 {
+        eprintln!("usage: iberalign-cli translate <file.fasta> [--mode degap|codon] [--code N]");
+        return ExitCode::FAILURE;
+    }
+
+    let code = match align_core::GeneticCode::by_id(code_id) {
+        Some(c) => c,
+        None => {
+            eprintln!("error: unknown genetic code table '{code_id}' (only 1/Standard available)");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let bytes = match std::fs::read(files[0]) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: cannot read '{}': {e}", files[0]);
+            return ExitCode::FAILURE;
+        }
+    };
+    let out = match align_core::parse_fasta(&bytes) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("parse error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let ds = align_core::Dataset::from_records(&out.records);
+    if ds.sequences.is_empty() {
+        eprintln!("error: '{}' has no sequences", files[0]);
+        return ExitCode::FAILURE;
+    }
+
+    for (i, seq) in ds.sequences.iter().enumerate() {
+        // Degap reads the ungapped residues; codon-through walks the aligned row
+        // in column coordinates (feeding degapped residues here would make
+        // --mode codon a silent no-op identical to degap).
+        let input: &[u8] = match mode {
+            align_core::TranslateMode::Degap => &seq.residues,
+            align_core::TranslateMode::CodonThrough => &ds.alignment.rows[i].gapped,
+        };
+        let protein = align_core::translate(input, &code, mode);
+        println!(">{}", seq.name);
+        println!("{}", String::from_utf8_lossy(&protein));
+    }
+    for w in &out.warnings {
+        eprintln!("warning: {w}");
+    }
+    ExitCode::SUCCESS
+}
+
 /// `generate <rows> <cols> <out.fasta> [gap_pct]` — write a synthetic
 /// equal-width FASTA to a file, for the rendering perf smoke (spec §12).
 ///
@@ -536,6 +637,7 @@ fn usage() {
     eprintln!("                            [--matrix NAME] [--gap-open N] [--gap-extend N]");
     eprintln!("  iberalign-cli msa         <file.fasta> [--matrix NAME]");
     eprintln!("                            [--gap-open N] [--gap-extend N]");
+    eprintln!("  iberalign-cli translate   <file.fasta> [--mode degap|codon] [--code N]");
 }
 
 #[cfg(test)]

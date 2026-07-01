@@ -1,8 +1,29 @@
 # DNA/RNA ↔ Protein separate views + translation — design plan
 
-**Status: DESIGN-ONLY (no code). Both forks DECIDED by the user 2026-07-01 (see
-`## Fork decisions` below). Ready to phase into implementation on the user's
-go-ahead.** Session 2026-07-01.
+**Status: Phase 1 (engine + CLI) DONE + green 2026-07-01. Both forks DECIDED
+2026-07-01 (see `## Fork decisions`). Phases 2–5 pending.** Session 2026-07-01.
+
+## Phase 1 — `align-core::translate` + CLI (DONE, green)
+
+`crates/align-core/src/translate.rs`: `GeneticCode { name, id, aa: [u8;64] }`
+holding a full 64-codon table seeded with **NCBI table 1 (Standard)** in TCAG
+order (`GeneticCode::standard()`/`default()`; `by_id(1)` only — extra tables are
+future *data*). `TranslateMode { Degap, CodonThrough }` (mirrors `AlignMode`).
+`translate(input, &code, mode) -> Vec<u8>`: **Degap** filters gaps
+(`coords::is_gap`) then reads whole codons (trailing 1–2 dropped, len =
+⌊ungapped/3⌋); **CodonThrough** groups every 3 *columns* — all-gap codon → `-`,
+codon spanning a gap → `X`, else translate (len = ⌊cols/3⌋ so rows stay
+rectangular). Case-insensitive; `U` reads as `T`; any non-ACGTU base → `X`. No
+alphabet guard (bytes-in/bytes-out — the "DNA/RNA only" guard belongs at the
+Phase-2 seam). 13 unit + 2 proptest (length invariants; ATG→M / stops→`*` guard
+the base_index↔table agreement). CLI: `align-cli translate <file.fasta> [--mode
+degap|codon] [--code N]` — **codon mode reads `rows[i].gapped`, degap reads
+`sequences[i].residues`** (feeding degapped bytes to the codon path would make
+`--mode codon` a silent no-op — advisor-flagged). align-core + align-cli tests +
+clippy `-D warnings` + fmt clean. **Next: Phase 2 seam** (`translate_block` IPC
+command).
+
+---
 
 Origin: during the custom-colors GUI smoke the user asked for protein and DNA/RNA
 to be **separate views you switch between**, with a DNA/RNA view able to **translate
