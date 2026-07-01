@@ -1,8 +1,35 @@
 # DNA/RNA ↔ Protein separate views + translation — design plan
 
-**Status: Phases 1 (engine + CLI) + 2 (IPC seam) DONE + green 2026-07-01. Both
-forks DECIDED 2026-07-01 (see `## Fork decisions`). Phases 3–5 pending.** Session
-2026-07-01.
+**Status: Phases 1 (engine + CLI) + 2 (IPC seam) + 3 (selection→translate UI) DONE +
+green 2026-07-01. Both forks DECIDED 2026-07-01 (see `## Fork decisions`). Phases 4–5
+pending.** Session 2026-07-01.
+
+## Phase 3 — selection → translate action + read-only result modal (DONE, green)
+
+The frontend wiring of the Phase-2 seam, PURE FRONTEND (no Rust — the `translate_block`
+command already exists). A new **Translate** menu (`ui/MenuBar.tsx`) with **"Translate
+selection to protein…"** + a **Gap mode** submenu (**Degap** default | **Codon**).
+`Grid.tsx::doTranslate` (mount-effect handler, bridged via `doTranslateRef` like
+`doAlign`) reads the current selection, translates the selected rows over the selection's
+**column window `[c0, c1]`** (UNLIKE `doAlign`, which ignores the column extent — Q2 is
+selection-scoped) via `translateBlock(rowList, c0, c1, mode)`, pairs the result with the
+source names, and opens a **read-only modal** (`ui/TranslateDialog.tsx` + `.css`, drag-to-
+move + Esc/backdrop/Done close, same shell as ConsensusDialog/ColorsDialog) listing the
+translated protein rows in monospace. This is the thin Q1=B display (DNA stays the source
+of truth; protein is a look-only projection) — Phase 4 graduates it to the real switchable
+"protein subwindow" with palette coloring.
+
+Key decisions (advisor-reviewed): **alphabet gate is frontend-side** — `translate_block`
+is permissive (translates whatever bytes it's given), so `canTranslate = alphabet !==
+"Protein"` disables the action on a protein file (translating protein-as-DNA → garbage).
+The **<3-column window** result (`width 0`, also nothing-loaded / stale window) is messaged
+explicitly ("select at least 3 columns") instead of popping an empty modal; no selection
+warns; no `code` arg passed (defaults to 1/Standard — the picker is Phase 5). `translateOpenRef`
+gates the grid's window keydown while the modal is up (like `consensusOpenRef`/`colorsOpenRef`);
+the `[view]` effect closes the modal on load (stale result / a protein load has nothing to
+translate). `TranslateDialog.dom.test.tsx` (7 tests, jsdom+RTL). typecheck + build + 349
+vitest (326 node + 23 dom) green. **Next: Phase 4** (real switchable protein view +
+protein-palette coloring).
 
 ## Phase 2 — `translate_block` IPC seam (DONE, green)
 

@@ -30,6 +30,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CopyFormat } from "../model/copy";
 import type { GridColoring, TrackColoring } from "../model/coloring";
 import type { BlockAlignMode } from "../ipc/edit";
+import type { TranslateMode } from "../ipc/translate";
 import type { ColorScheme } from "../render/colors";
 import "./MenuBar.css";
 
@@ -113,6 +114,14 @@ interface MenuBarProps {
    *  inserts the needed columns. */
   blockAlignMode: BlockAlignMode;
   onSetBlockAlignMode: (mode: BlockAlignMode) => void;
+  /** Whether translation is offered — true for a DNA/RNA alignment, false for a
+   *  Protein one (nothing to translate). Disables the Translate action. */
+  canTranslate: boolean;
+  /** Translate the selected block to protein (opens the read-only result modal). */
+  onTranslate: () => void;
+  /** The active translation gap mode (the Degap|Codon submenu). */
+  translateMode: TranslateMode;
+  onSetTranslateMode: (mode: TranslateMode) => void;
   /** Open the consensus & coloring options modal. */
   onOpenConsensus: () => void;
   /** Open the Colors (custom per-residue palette) modal. */
@@ -195,6 +204,10 @@ export default function MenuBar(props: MenuBarProps) {
     onSetAlignEngine,
     blockAlignMode,
     onSetBlockAlignMode,
+    canTranslate,
+    onTranslate,
+    translateMode,
+    onSetTranslateMode,
     onOpenConsensus,
     onOpenColors,
     schemes,
@@ -386,6 +399,39 @@ export default function MenuBar(props: MenuBarProps) {
               value: "grow",
               label: "Grow",
               title: "Block align (sub-column select): insert columns when the aligned block is wider than the window",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      key: "translate",
+      label: "Translate",
+      items: [
+        {
+          kind: "action",
+          key: "translatesel",
+          label: "Translate selection to protein…",
+          disabled: !canTranslate,
+          onClick: onTranslate,
+        },
+        { kind: "sep", key: "ts1" },
+        {
+          kind: "submenu",
+          key: "transmode",
+          label: "Gap mode",
+          value: translateMode,
+          onSelect: (v) => onSetTranslateMode(v as TranslateMode),
+          options: [
+            {
+              value: "degap",
+              label: "Degap",
+              title: "Strip gaps in the selected columns, then translate the clean reading frame (default)",
+            },
+            {
+              value: "codon",
+              label: "Codon",
+              title: "Translate codons through the alignment columns (keeps 1:3 column correspondence; a gap-spanning codon → X, an all-gap codon → –)",
             },
           ],
         },

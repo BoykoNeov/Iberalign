@@ -72,9 +72,11 @@ import {
   redoEdit,
 } from "../ipc/edit";
 import { getAlignmentMeta, getRenderBuffer } from "../ipc/commands";
+import { translateBlock, type TranslateMode } from "../ipc/translate";
 import { residueForKey } from "../model/typing";
 import type { PasteMode, CutMode, DeleteMode, TypeMode, AlignEngine } from "./MenuBar";
 import ConsensusDialog from "./ConsensusDialog";
+import TranslateDialog from "./TranslateDialog";
 import { defaultConfigFor, type ConsensusConfig } from "../model/consensus";
 import { ColumnData } from "../model/columnData";
 import {
@@ -264,6 +266,26 @@ export default function Grid({ view, onResized }: GridProps) {
   // shadows it for the effect-scoped `doAlign`, like `alignEngine`.
   const [blockAlignMode, setBlockAlignMode] = useState<BlockAlignMode>("fit");
   const blockAlignModeRef = useRef<BlockAlignMode>("fit");
+  // Translation (DNA/RNA → protein, Phase 3). `translateMode` is the gap mode
+  // (Degap default | Codon-through), shadowed into a ref for the effect-scoped
+  // `doTranslate`. `translateData` holds the finished protein rows to show; the
+  // read-only modal is open while it's non-null AND `translateOpen`. `translateOpenRef`
+  // shadows the open flag so the once-bound window keydown bails while it's up (like
+  // `consensusOpenRef` / `colorsOpenRef`). Translation is a STATELESS read-only IPC
+  // (no edit, no history) — the DNA alignment stays the source of truth (Q1=B).
+  const [translateMode, setTranslateMode] = useState<TranslateMode>("degap");
+  const translateModeRef = useRef<TranslateMode>("degap");
+  const [translateOpen, setTranslateOpen] = useState(false);
+  const translateOpenRef = useRef(false);
+  translateOpenRef.current = translateOpen;
+  const [translateData, setTranslateData] = useState<{
+    mode: TranslateMode;
+    cols: [number, number];
+    rows: { name: string; seq: string }[];
+  } | null>(null);
+  // Bridge to the effect-scoped `doTranslate` (it reads the store/view), like the
+  // other `doX` handlers — the menu bar reaches it through this ref.
+  const doTranslateRef = useRef<() => void>(() => {});
   // Consensus options (Phase 3). `consensusConfig === null` means "follow the
   // alphabet default" — the back-compat track behavior; a config is the user's
   // dialog override, applied LIVE (an effect pushes it to the track renderer +
@@ -307,6 +329,9 @@ export default function Grid({ view, onResized }: GridProps) {
   // The active palette slot for the loaded alphabet (a linked RNA file uses DNA's).
   const activeKey = effectiveKey(String(view.meta.alphabet), linkDnaRna);
   const activePalette = palettes[activeKey];
+  // Translation is offered only for a nucleotide alignment — a Protein file has
+  // nothing to translate (the command would treat protein bytes as DNA → garbage).
+  const canTranslate = String(view.meta.alphabet) !== "Protein";
   // Shadow for the effect-bound handlers (openColors etc. don't need it, but the
   // View → Color scheme quick-pick and the dialog handlers write the ACTIVE slot).
   const activeKeyRef = useRef(activeKey);
@@ -493,6 +518,17 @@ export default function Grid({ view, onResized }: GridProps) {
     blockAlignModeRef.current = mode;
     setBlockAlignMode(mode);
   }, []);
+
+  // Pick the translation gap mode (Degap | Codon) from the menu bar; mirror into the
+  // ref the effect-scoped `doTranslate` reads.
+  const handleSetTranslateMode = useCallback((mode: TranslateMode) => {
+    translateModeRef.current = mode;
+    setTranslateMode(mode);
+  }, []);
+
+  // Menu bar "Translate selection to protein" → the effect-scoped translate flow.
+  const handleTranslate = useCallback(() => doTranslateRef.current(), []);
+  const closeTranslate = useCallback(() => setTranslateOpen(false), []);
 
   // Menu bar Del Rows / Del Cols buttons → the effect-scoped structural deletes.
   const handleDeleteRows = useCallback(() => doDeleteRowsRef.current(), []);
@@ -1212,6 +1248,53 @@ export default function Grid({ view, onResized }: GridProps) {
     };
     doAlignRef.current = doAlign;
 
+    // Translate the SELECTED block to protein — READ-ONLY (no edit, no history). The
+    // stateless `translate_block` IPC reads the current DNA/RNA rows over the
+    // selection's column window `[c0, c1]` (UNLIKE `doAlign`, which ignores the column
+    // extent) and returns the translated protein rows; we pair them with the source
+    // names and open the result modal. `translate_block` is permissive (it translates
+    // whatever bytes it's given), so the alphabet gate is here: a Protein alignment
+    // has nothing to translate. The gap mode (Degap default | Codon-through) rides
+    // through. A <3-column window (or nothing loaded / stale window) comes back width 0
+    // — reported explicitly rather than popping an empty modal.
+    const doTranslate = async () => {
+      const v = viewRef.current;
+      if (!v) return;
+      if (String(v.meta.alphabet) === "Protein") {
+        showMsg("Translation needs a DNA or RNA alignment", "warn");
+        return;
+      }
+      const sel = store.getSelection();
+      if (!sel) {
+        showMsg("Select the region to translate first", "warn");
+        return;
+      }
+      const { r0, r1, c0, c1 } = normalize(sel);
+      const rowList = Array.from({ length: r1 - r0 + 1 }, (_, i) => r0 + i);
+      const mode = translateModeRef.current;
+      try {
+        const res = await translateBlock(rowList, c0, c1, mode);
+        if (res.width === 0) {
+          // Width 0 ⇒ no codon in any row. In codon mode that's a <3-column window; in
+          // degap mode it can also be a wide window whose rows each have <3 non-gap
+          // bases — so word it by cause, not by column count.
+          showMsg(
+            mode === "codon"
+              ? "Select at least 3 columns to translate (one codon)"
+              : "Not enough residues to translate (need at least 3 non-gap bases)",
+            "warn",
+          );
+          return;
+        }
+        const rows = rowList.map((r, i) => ({ name: v.nameAt(r), seq: res.rows[i] ?? "" }));
+        setTranslateData({ mode, cols: [c0, c1], rows });
+        setTranslateOpen(true);
+      } catch (err) {
+        showMsg(`Translate failed: ${String(err)}`, "warn");
+      }
+    };
+    doTranslateRef.current = () => void doTranslate();
+
     // Keyboard residue entry: write `letter` at the cursor's ACTIVE cell, then
     // advance the cursor one cell right. Two modes (the menu bar / Insert-key toggle):
     //   - Replace (default): overwrite the cell in place — a width-preserving
@@ -1476,7 +1559,7 @@ export default function Grid({ view, onResized }: GridProps) {
       // A modal (consensus options or the Colors palette) is up: let it own the
       // keyboard (its Esc handler closes it). Bail so arrows/Delete/Ctrl+Z can't
       // drive the grid behind the dialog.
-      if (consensusOpenRef.current || colorsOpenRef.current) return;
+      if (consensusOpenRef.current || colorsOpenRef.current || translateOpenRef.current) return;
       // A menu dropdown is open and may cover the grid: bail so Delete / arrows can't
       // mutate or move the selection behind it (the MenuBar handles Esc itself).
       if (menuOpenRef.current) return;
@@ -1816,6 +1899,9 @@ export default function Grid({ view, onResized }: GridProps) {
     setCopyMsg(null);
     // A delete menu from the previous alignment must not linger over the new one.
     setCtxMenu(null);
+    // A translation result from the previous alignment is stale (and a protein load
+    // has nothing to translate) — close the modal.
+    setTranslateOpen(false);
     // Drop a consensus-config override on a CROSS-ALPHABET load (a protein file
     // must not inherit a DNA strict-IUPAC override, and vice-versa) — back to the
     // new alphabet's default. A same-alphabet reload keeps the user's choices.
@@ -1929,6 +2015,10 @@ export default function Grid({ view, onResized }: GridProps) {
         onSetAlignEngine={handleSetAlignEngine}
         blockAlignMode={blockAlignMode}
         onSetBlockAlignMode={handleSetBlockAlignMode}
+        canTranslate={canTranslate}
+        onTranslate={handleTranslate}
+        translateMode={translateMode}
+        onSetTranslateMode={handleSetTranslateMode}
         onOpenConsensus={openConsensus}
         onOpenColors={openColors}
         schemes={SCHEMES}
@@ -2059,6 +2149,16 @@ export default function Grid({ view, onResized }: GridProps) {
           linked={linkDnaRna}
           onToggleLink={handleToggleLink}
           onClose={closeColors}
+        />
+      )}
+      {/* Translation result modal (Phase 3). Read-only view of the translated protein
+          for the selected block; the DNA alignment stays the source of truth. */}
+      {translateOpen && translateData && (
+        <TranslateDialog
+          mode={translateData.mode}
+          cols={translateData.cols}
+          rows={translateData.rows}
+          onClose={closeTranslate}
         />
       )}
     </div>

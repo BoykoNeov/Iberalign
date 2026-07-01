@@ -1,0 +1,219 @@
+/* Translation result modal (see TranslateDialog.tsx). A fixed-inset backdrop with a
+ * centered card, reusing the chrome palette + the ConsensusDialog shell so it reads
+ * as one app. Read-only: the body lists the translated protein rows in a monospace
+ * grid; only a Done button in the foot. */
+
+.tr-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200; /* above the context menu (100) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.tr-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 420px;
+  max-width: min(760px, 94vw);
+  max-height: 82vh;
+  background: #ffffff;
+  border: 1px solid #cdd2d6;
+  border-radius: 8px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28);
+  color: #2a2d30;
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+
+/* The header doubles as the drag handle (pointer-capture drag translates the card).
+ * `cursor: move` advertises it; `user-select: none` keeps a fast drag from selecting
+ * the title text. The × button re-asserts its own cursor. */
+.tr-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e1e4e7;
+  background: #eef0f2;
+  cursor: move;
+  user-select: none;
+}
+
+.tr-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.tr-badge {
+  padding: 1px 7px;
+  border: 1px solid #c2c7cc;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #6a7077;
+  font-size: 0.72rem;
+}
+
+.tr-x {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #6a7077;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tr-x:hover {
+  background: #dde1e4;
+  color: #2a2d30;
+}
+
+/* Context line under the header: genetic code · column window · sequence count. */
+.tr-sub {
+  padding: 8px 14px;
+  border-bottom: 1px solid #e1e4e7;
+  background: #f6f7f8;
+  color: #6a7077;
+  font-size: 0.74rem;
+}
+
+/* The scrollable result grid — vertical for many rows, horizontal for a wide
+ * translation. `min-height: 0` lets it shrink inside the flex-column card so the
+ * foot stays visible. */
+.tr-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 14px;
+}
+
+.tr-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+/* Fixed-width name column so the residue strings line up; long names ellipsize
+ * (the full name is in the title tooltip). */
+.tr-name {
+  flex: 0 0 150px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #41464b;
+  font-size: 0.76rem;
+}
+
+.tr-unnamed {
+  color: #a4abb1;
+  font-style: italic;
+}
+
+.tr-seq {
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  white-space: pre;
+  letter-spacing: 0.06em;
+  color: #2a2d30;
+}
+
+.tr-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid #e1e4e7;
+  background: #f6f7f8;
+}
+
+.tr-btn {
+  padding: 4px 14px;
+  border: 1px solid #c2c7cc;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #2a2e32;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tr-btn:hover:not(:disabled) {
+  background: #f3f5f7;
+  border-color: #a9afb5;
+}
+
+.tr-done {
+  background: #396cd8;
+  border-color: #396cd8;
+  color: #ffffff;
+}
+
+.tr-done:hover:not(:disabled) {
+  background: #2f5fc0;
+  border-color: #2f5fc0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .tr-card {
+    background: #2a2d30;
+    border-color: #444;
+    color: #d6d9dc;
+  }
+  .tr-head {
+    background: #26292d;
+    border-bottom-color: #444;
+  }
+  .tr-badge {
+    background: #31353a;
+    border-color: #4a4f55;
+    color: #9aa0a7;
+  }
+  .tr-x {
+    color: #9aa0a7;
+  }
+  .tr-x:hover {
+    background: #3a3f44;
+    color: #e3e6e9;
+  }
+  .tr-sub {
+    background: #26292d;
+    border-bottom-color: #444;
+    color: #9aa0a7;
+  }
+  .tr-name {
+    color: #cfd3d7;
+  }
+  .tr-unnamed {
+    color: #6b7177;
+  }
+  .tr-seq {
+    color: #e3e6e9;
+  }
+  .tr-foot {
+    background: #26292d;
+    border-top-color: #444;
+  }
+  .tr-btn {
+    background: #31353a;
+    border-color: #4a4f55;
+    color: #e3e6e9;
+  }
+  .tr-btn:hover:not(:disabled) {
+    background: #3a3f44;
+    border-color: #5b6168;
+  }
+  .tr-done {
+    background: #5b8def;
+    border-color: #5b8def;
+    color: #11151a;
+  }
+  .tr-done:hover:not(:disabled) {
+    background: #6f9bf2;
+    border-color: #6f9bf2;
+  }
+}
