@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   makeScheme,
   getScheme,
+  schemeForAlphabet,
   registerScheme,
   listSchemes,
   CLASSIC_SCHEME,
@@ -15,6 +16,12 @@ import {
   VIVID_SCHEME,
   DEFAULT_SCHEME_ID,
   GLYPH_INK,
+  schemeWithOverrides,
+  resolveResidue,
+  autoInk,
+  rgbToHex,
+  hexToRgb,
+  parseRgbCss,
   type Rgb,
 } from "./colors";
 
@@ -204,6 +211,45 @@ describe("protein amino-acid palette (per scheme)", () => {
   });
 });
 
+describe("schemeForAlphabet — nucleotide scoping (regression: no protein colors on DNA/RNA)", () => {
+  // IUPAC nucleotide ambiguity codes the consensus track emits for variable columns.
+  // All but `B` are ALSO amino one-letter codes — the exact overlap that leaked
+  // protein colors into a DNA/RNA consensus before scoping (the `2e948fe` bug).
+  const AMBIG = "RYSWKMDHVN".split("");
+
+  for (const id of ["vivid", "classic", "colorblind"]) {
+    const nuc = schemeForAlphabet(id, "DNA");
+    const prot = schemeForAlphabet(id, "Protein");
+    // `B` (Asx) is not one of the 20 amino acids, so it is the fallback grey in
+    // every variant — use it as the reference "grey" without hardcoding an rgb.
+    const fallback = nuc.fillStyleFor(ord("B"));
+
+    it(`[${id}] nucleotide variant paints ambiguity codes grey, not amino colors`, () => {
+      for (const ch of AMBIG) {
+        expect(nuc.fillStyleFor(ord(ch))).toBe(fallback); // grey fallback
+        expect(nuc.fillStyleFor(ord(ch))).not.toBe(prot.fillStyleFor(ord(ch))); // ≠ protein color
+      }
+    });
+
+    it(`[${id}] protein variant still colors those letters as amino acids`, () => {
+      for (const ch of AMBIG) {
+        expect(prot.fillStyleFor(ord(ch))).not.toBe(fallback);
+      }
+    });
+
+    it(`[${id}] RNA scopes like DNA (nucleotide), not protein`, () => {
+      const rna = schemeForAlphabet(id, "RNA");
+      for (const ch of AMBIG) expect(rna.fillStyleFor(ord(ch))).toBe(fallback);
+    });
+
+    it(`[${id}] A/C/G/T/U keep the same nucleotide color in both variants`, () => {
+      for (const ch of "ACGTU".split("")) {
+        expect(nuc.fillStyleFor(ord(ch))).toBe(prot.fillStyleFor(ord(ch)));
+      }
+    });
+  }
+});
+
 describe("makeScheme", () => {
   it("bakes a custom palette with gap and fallback handling", () => {
     const red: Rgb = [255, 0, 0];
@@ -249,5 +295,88 @@ describe("scheme registry (selectability)", () => {
     registerScheme(custom);
     expect(getScheme("custom-test")).toBe(custom);
     expect(listSchemes().map((s) => s.id)).toContain("custom-test");
+  });
+});
+
+describe("hex / rgb helpers", () => {
+  it("round-trips rgb ↔ hex", () => {
+    expect(rgbToHex([34, 195, 42])).toBe("#22c32a");
+    expect(hexToRgb("#22c32a")).toEqual([34, 195, 42]);
+    expect(hexToRgb("#FFF")).toEqual([255, 255, 255]); // 3-digit shorthand
+  });
+
+  it("parses the `rgb(r, g, b)` CSS `makeScheme` bakes", () => {
+    expect(parseRgbCss("rgb(46, 144, 255)")).toEqual([46, 144, 255]);
+    expect(parseRgbCss("not-a-color")).toEqual([0, 0, 0]);
+  });
+});
+
+describe("autoInk — auto-contrast letter over a custom fill", () => {
+  it("picks black on a light fill, white on a dark fill", () => {
+    expect(autoInk([255, 255, 255])).toEqual([0, 0, 0]);
+    expect(autoInk([0, 0, 0])).toEqual([255, 255, 255]);
+    expect(autoInk([255, 210, 26])).toEqual([0, 0, 0]); // vivid yellow — black
+    expect(autoInk([40, 40, 120])).toEqual([255, 255, 255]); // dark navy — white
+  });
+});
+
+describe("schemeWithOverrides — user custom colors", () => {
+  it("returns the base UNCHANGED when there are no overrides", () => {
+    expect(schemeWithOverrides(VIVID_SCHEME, {})).toBe(VIVID_SCHEME);
+    // an override object with no actual fill/ink is still a no-op
+    expect(schemeWithOverrides(VIVID_SCHEME, { A: {} })).toBe(VIVID_SCHEME);
+  });
+
+  it("overrides a residue's fill (upper and lower byte) and keeps the base id stable per content", () => {
+    const s = schemeWithOverrides(VIVID_SCHEME, { A: { fill: [10, 20, 30] } });
+    expect(s.fillStyleFor(ord("A"))).toBe("rgb(10, 20, 30)");
+    expect(s.fillStyleFor(ord("a"))).toBe("rgb(10, 20, 30)"); // lowercase shares
+    expect(s.fillStyleFor(ord("C"))).toBe(VIVID_SCHEME.fillStyleFor(ord("C"))); // others untouched
+    // same content → same id (safe for atlas memo); different content → different id
+    const same = schemeWithOverrides(VIVID_SCHEME, { A: { fill: [10, 20, 30] } });
+    expect(same.id).toBe(s.id);
+    const diff = schemeWithOverrides(VIVID_SCHEME, { A: { fill: [11, 20, 30] } });
+    expect(diff.id).not.toBe(s.id);
+  });
+
+  it("gives a fresh id different from the base so glyph atlases rebuild", () => {
+    const s = schemeWithOverrides(VIVID_SCHEME, { A: { ink: [255, 0, 0] } });
+    expect(s.id).not.toBe(VIVID_SCHEME.id);
+  });
+
+  it("auto-contrasts the letter when a fill is overridden but no ink is set", () => {
+    const dark = schemeWithOverrides(VIVID_SCHEME, { A: { fill: [10, 10, 10] } });
+    expect(dark.inkStyleFor(ord("A"))).toBe("rgb(255, 255, 255)"); // white on dark
+    const light = schemeWithOverrides(VIVID_SCHEME, { A: { fill: [240, 240, 240] } });
+    expect(light.inkStyleFor(ord("A"))).toBe("rgb(0, 0, 0)"); // black on light
+  });
+
+  it("honors an explicit ink override over auto-contrast", () => {
+    const s = schemeWithOverrides(VIVID_SCHEME, { A: { fill: [10, 10, 10], ink: [255, 210, 0] } });
+    expect(s.inkStyleFor(ord("A"))).toBe("rgb(255, 210, 0)");
+  });
+
+  it("leaves un-overridden residues inking solid black (built-in behavior preserved)", () => {
+    const s = schemeWithOverrides(VIVID_SCHEME, { A: { fill: [10, 10, 10] } });
+    expect(s.inkStyleFor(ord("C"))).toBe(GLYPH_INK);
+  });
+});
+
+describe("resolveResidue — effective color for the dialog swatches", () => {
+  it("reads the base color when un-overridden", () => {
+    const { fill, ink } = resolveResidue(VIVID_SCHEME, {}, "A");
+    expect(fill).toEqual([34, 195, 42]); // vivid green
+    expect(ink).toEqual([0, 0, 0]); // base black
+  });
+
+  it("reflects a fill override with auto-contrast ink", () => {
+    const { fill, ink } = resolveResidue(VIVID_SCHEME, { G: { fill: [10, 10, 10] } }, "G");
+    expect(fill).toEqual([10, 10, 10]);
+    expect(ink).toEqual([255, 255, 255]);
+  });
+
+  it("reflects an explicit ink override", () => {
+    const { ink } = resolveResidue(VIVID_SCHEME, { G: { ink: [1, 2, 3] } }, "G");
+    expect(ink).toEqual([1, 2, 3]);
   });
 });

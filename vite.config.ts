@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
@@ -28,5 +28,32 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
+  },
+
+  // Vitest. Two projects so the pure engine/model tests stay fast in `node` and are
+  // never touched by the DOM harness, while React component tests opt into `jsdom` by
+  // file name (`*.dom.test.tsx`). Both inherit the root config (`extends: true`) so the
+  // React plugin transforms TSX in either. See `src/test/setup.ts` for the jsdom setup.
+  test: {
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "node",
+          environment: "node",
+          include: ["src/**/*.test.{ts,tsx}"],
+          exclude: ["src/**/*.dom.test.{ts,tsx}"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "dom",
+          environment: "jsdom",
+          include: ["src/**/*.dom.test.{ts,tsx}"],
+          setupFiles: ["./src/test/setup.ts"],
+        },
+      },
+    ],
   },
 }));

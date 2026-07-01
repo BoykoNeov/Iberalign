@@ -83,7 +83,17 @@ import {
   type GridColoring,
   type TrackColoring,
 } from "../model/coloring";
-import { getScheme, listSchemes, DEFAULT_SCHEME_ID } from "../render/colors";
+import {
+  schemeForAlphabet,
+  listSchemes,
+  schemeWithOverrides,
+  DEFAULT_SCHEME_ID,
+  NUCLEOTIDE_RESIDUES,
+  AMINO_ACID_RESIDUES,
+  type PaletteOverrides,
+  type ResidueOverride,
+} from "../render/colors";
+import ColorsDialog from "./ColorsDialog";
 import "./Grid.css";
 
 // CSS vars driven from the JS chrome constants so the grid track sizes and the
@@ -102,6 +112,33 @@ const CHROME_VARS = {
 // The selectable color schemes for the View → Color scheme menu. Read once from the
 // registry (stable for the session) so the menu prop has a constant identity.
 const SCHEMES = listSchemes();
+
+// Per-alphabet custom palettes. Coloring is kept separately for DNA / RNA / Protein
+// (a base scheme id + per-residue overrides each), so switching between a DNA and a
+// protein file swaps which palette is active without losing the other's colors. When
+// DNA & RNA are LINKED (default), RNA reads/writes the DNA slot — one shared
+// nucleotide palette; unlinking seeds RNA from DNA and lets them diverge.
+type AlphabetKey = "DNA" | "RNA" | "Protein";
+interface PaletteState {
+  baseId: string;
+  overrides: PaletteOverrides;
+}
+const INITIAL_PALETTES: Record<AlphabetKey, PaletteState> = {
+  DNA: { baseId: DEFAULT_SCHEME_ID, overrides: {} },
+  RNA: { baseId: DEFAULT_SCHEME_ID, overrides: {} },
+  Protein: { baseId: DEFAULT_SCHEME_ID, overrides: {} },
+};
+
+/** Map an alphabet label to its palette slot (anything non-protein/RNA → DNA). */
+function alphaKey(alphabet: string): AlphabetKey {
+  return alphabet === "Protein" ? "Protein" : alphabet === "RNA" ? "RNA" : "DNA";
+}
+/** The slot actually read/written for `alphabet`: a LINKED RNA file uses the DNA
+ *  slot (shared nucleotide palette); everything else uses its own slot. */
+function effectiveKey(alphabet: string, linked: boolean): AlphabetKey {
+  const k = alphaKey(alphabet);
+  return linked && k === "RNA" ? "DNA" : k;
+}
 
 // Wheel-zoom sensitivity: factor = exp(-deltaY * k). One ~100px notch ⇒ ~1.22×
 // in / 0.82× out, smooth on trackpads where deltaY is finer-grained.
@@ -252,12 +289,28 @@ export default function Grid({ view, onResized }: GridProps) {
   // Bridge to the minimap (its scheme follows the View → Color scheme pick too, so
   // the overview stays consistent with the grid). Nulled in cleanup.
   const minimapRendererRef = useRef<MinimapLayer | null>(null);
-  // View options (Phase 5 menu bar). `schemeId` selects the residue color scheme
-  // (Vivid / Classic / Colorblind from the registry); pushed live to all three
-  // renderers. `trackVisible` shows/hides the consensus lane — the CSS row collapses
-  // to 0 (`--track-h`) and the track renderer skips its paint. Both apply with no IPC.
-  const [schemeId, setSchemeId] = useState<string>(DEFAULT_SCHEME_ID);
+  // View options (Phase 5 menu bar). Custom coloring lives in `palettes` (a base
+  // scheme id + per-residue fill/ink overrides per alphabet class) + `linkDnaRna`
+  // (default on: DNA & RNA share one nucleotide palette). The active alphabet's
+  // effective scheme is baked (base + overrides) and pushed live to all three
+  // renderers by the effect below — no IPC (coloring is view state; Rust owns truth).
+  // `colorsOpen` gates the Colors dialog; `colorsOpenRef` shadows it so the window
+  // keydown handler bails while it's up (mirrors `consensusOpenRef`). `trackVisible`
+  // shows/hides the consensus lane — the CSS row collapses to 0 (`--track-h`) and the
+  // track renderer skips its paint. All apply with no IPC.
+  const [palettes, setPalettes] = useState<Record<AlphabetKey, PaletteState>>(INITIAL_PALETTES);
+  const [linkDnaRna, setLinkDnaRna] = useState(true);
+  const [colorsOpen, setColorsOpen] = useState(false);
+  const colorsOpenRef = useRef(false);
+  colorsOpenRef.current = colorsOpen;
   const [trackVisible, setTrackVisible] = useState(true);
+  // The active palette slot for the loaded alphabet (a linked RNA file uses DNA's).
+  const activeKey = effectiveKey(String(view.meta.alphabet), linkDnaRna);
+  const activePalette = palettes[activeKey];
+  // Shadow for the effect-bound handlers (openColors etc. don't need it, but the
+  // View → Color scheme quick-pick and the dialog handlers write the ACTIVE slot).
+  const activeKeyRef = useRef(activeKey);
+  activeKeyRef.current = activeKey;
   // The alphabet of the currently-loaded view, to detect a cross-alphabet load.
   const prevAlphabetRef = useRef<string | null>(null);
   // Menu bar message with a tone: `warn` (failures / dropped / truncated) shows bold
@@ -452,11 +505,48 @@ export default function Grid({ view, onResized }: GridProps) {
   const openConsensus = useCallback(() => setConsensusOpen(true), []);
   const closeConsensus = useCallback(() => setConsensusOpen(false), []);
 
-  // View menu. The scheme + track-visibility live in React state; effects below push
-  // them to the renderers. Grid + track coloring modes patch the shared
+  // View menu. Track-visibility lives in React state; effects below push it + the
+  // effective scheme to the renderers. Grid + track coloring modes patch the shared
   // `coloringConfig` (the same state the dialog edits — the menu is a quick-pick).
-  const handleSetScheme = useCallback((id: string) => setSchemeId(id), []);
+  // The Color-scheme quick-pick sets the BASE scheme for the active alphabet's slot.
+  const handleSetScheme = useCallback((id: string) => {
+    const key = activeKeyRef.current;
+    setPalettes((p) => ({ ...p, [key]: { ...p[key], baseId: id } }));
+  }, []);
   const handleToggleTrack = useCallback(() => setTrackVisible((v) => !v), []);
+
+  // Colors dialog. Opens/closes the modal; the per-residue overrides + base + link
+  // all write the ACTIVE alphabet's slot (a linked RNA file writes DNA's).
+  const openColors = useCallback(() => setColorsOpen(true), []);
+  const closeColors = useCallback(() => setColorsOpen(false), []);
+  // Set/merge/reset one residue's override (`null` ⇒ drop it, back to the base color).
+  const handleOverrideChange = useCallback((residue: string, override: ResidueOverride | null) => {
+    const key = activeKeyRef.current;
+    setPalettes((p) => {
+      const next = { ...p[key].overrides };
+      if (override === null) delete next[residue];
+      else next[residue] = override;
+      return { ...p, [key]: { ...p[key], overrides: next } };
+    });
+  }, []);
+  const handleResetColors = useCallback(() => {
+    const key = activeKeyRef.current;
+    setPalettes((p) => ({ ...p, [key]: { ...p[key], overrides: {} } }));
+  }, []);
+  // Toggle the DNA/RNA link. Unlinking SEEDS the RNA slot from DNA's current palette
+  // (a deep copy of overrides) so RNA starts identical, then the user diverges it;
+  // re-linking makes RNA follow DNA again (its own slot is ignored while linked). The
+  // seed is a separate `setPalettes` (not nested in the `setLinkDnaRna` updater —
+  // state updaters must be pure; StrictMode double-invokes them).
+  const handleToggleLink = useCallback(() => {
+    if (linkDnaRna) {
+      setPalettes((p) => ({
+        ...p,
+        RNA: { baseId: p.DNA.baseId, overrides: { ...p.DNA.overrides } },
+      }));
+    }
+    setLinkDnaRna((v) => !v);
+  }, [linkDnaRna]);
   const handleSetGridColoring = useCallback(
     (mode: GridColoring) => setColoringConfig((c) => ({ ...c, grid: mode })),
     [],
@@ -1383,9 +1473,10 @@ export default function Grid({ view, onResized }: GridProps) {
     const onKeyDown = (e: KeyboardEvent) => {
       const v = viewRef.current;
       if (!v) return;
-      // The consensus modal is up: let it own the keyboard (its Esc handler closes
-      // it). Bail so arrows/Delete/Ctrl+Z can't drive the grid behind the dialog.
-      if (consensusOpenRef.current) return;
+      // A modal (consensus options or the Colors palette) is up: let it own the
+      // keyboard (its Esc handler closes it). Bail so arrows/Delete/Ctrl+Z can't
+      // drive the grid behind the dialog.
+      if (consensusOpenRef.current || colorsOpenRef.current) return;
       // A menu dropdown is open and may cover the grid: bail so Delete / arrows can't
       // mutate or move the selection behind it (the MenuBar handles Esc itself).
       if (menuOpenRef.current) return;
@@ -1755,16 +1846,28 @@ export default function Grid({ view, onResized }: GridProps) {
     storeRef.current?.markDirty();
   }, [coloringConfig]);
 
-  // Live-apply the color scheme (View → Color scheme) to all three renderers (grid,
-  // consensus track, minimap) so the palette stays consistent. The glyph atlases
-  // re-ink lazily on the next letter-tier draw. Marks the store dirty to repaint.
+  // Live-apply the EFFECTIVE color scheme (the active alphabet's base scheme + its
+  // per-residue custom overrides) to all three renderers (grid, consensus track,
+  // minimap) so the palette stays consistent. `schemeWithOverrides` gives the scheme
+  // a content-hashed id, so the glyph atlases (keyed on `scheme.id`) rebuild on any
+  // color change and reuse on none. Depends ONLY on `activePalette` — a cross-alphabet
+  // load switches `activeKey` to a different slot object, so its identity already
+  // changes and re-pushes; a same-alphabet reload keeps the identity (and the
+  // renderers persist), so no re-push is needed. NOT `view` — that would rebuild the
+  // atlas on every width-changing edit (e.g. insert-mode typing). Marks dirty.
   useEffect(() => {
-    const scheme = getScheme(schemeId);
+    // Scope the base scheme to the loaded alphabet FIRST: DNA/RNA get the
+    // nucleotide-only variant so the consensus track's IUPAC ambiguity codes fall to
+    // grey instead of amino colors (`schemeForAlphabet`). `activeKey` is one of
+    // DNA/RNA/Protein and only changes on load / link-toggle (never on an edit), so
+    // adding it to the deps doesn't rebuild the atlas per keystroke.
+    const base = schemeForAlphabet(activePalette.baseId, activeKey);
+    const scheme = schemeWithOverrides(base, activePalette.overrides);
     gridRendererRef.current?.setColorScheme(scheme);
     trackRendererRef.current?.setColorScheme(scheme);
     minimapRendererRef.current?.setColorScheme(scheme);
     storeRef.current?.markDirty();
-  }, [schemeId]);
+  }, [activePalette, activeKey]);
 
   // Live-apply consensus-lane visibility (View → Show consensus track). The CSS row
   // collapses to 0 height (`--track-h` below) and the renderer skips its paint; the
@@ -1827,8 +1930,9 @@ export default function Grid({ view, onResized }: GridProps) {
         blockAlignMode={blockAlignMode}
         onSetBlockAlignMode={handleSetBlockAlignMode}
         onOpenConsensus={openConsensus}
+        onOpenColors={openColors}
         schemes={SCHEMES}
-        schemeId={schemeId}
+        schemeId={activePalette.baseId}
         onSetScheme={handleSetScheme}
         gridColoring={coloringConfig.grid}
         onSetGridColoring={handleSetGridColoring}
@@ -1935,6 +2039,26 @@ export default function Grid({ view, onResized }: GridProps) {
           coloring={coloringConfig}
           onColoringChange={setColoringConfig}
           onClose={closeConsensus}
+        />
+      )}
+      {/* Colors dialog (custom per-residue palette). Edits the ACTIVE alphabet's slot;
+          the effective-scheme effect rebuilds + pushes the palette live. The residue
+          set + the Link toggle depend on whether the alphabet is nucleotide. */}
+      {colorsOpen && (
+        <ColorsDialog
+          alphabet={String(view.meta.alphabet)}
+          residues={activeKey === "Protein" ? AMINO_ACID_RESIDUES : NUCLEOTIDE_RESIDUES}
+          base={schemeForAlphabet(activePalette.baseId, activeKey)}
+          schemes={SCHEMES}
+          baseId={activePalette.baseId}
+          onSetBase={handleSetScheme}
+          overrides={activePalette.overrides}
+          onOverrideChange={handleOverrideChange}
+          onResetAll={handleResetColors}
+          showLink={activeKey !== "Protein"}
+          linked={linkDnaRna}
+          onToggleLink={handleToggleLink}
+          onClose={closeColors}
         />
       )}
     </div>

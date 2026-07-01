@@ -1,0 +1,158 @@
+/* Colors dialog — the swatch grid (see ColorsDialog.tsx). The card chrome, header,
+ * footer and buttons reuse ConsensusDialog.css's `.cons-*` classes; this file adds
+ * only the palette-editing controls. */
+
+.col-card {
+  min-width: 360px;
+  max-width: min(460px, 92vw);
+}
+
+/* Base-palette dropdown. */
+.col-select {
+  padding: 3px 8px;
+  border: 1px solid #c2c7cc;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #2a2d30;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Link DNA & RNA checkbox row. */
+.col-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #41464b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.col-check input {
+  cursor: pointer;
+}
+
+/* "Residue colors" subsection divider — mirrors `.cons-section`. */
+.col-section {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #e1e4e7;
+  color: #6a7077;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* A four-column grid: preview swatch · cell picker · letter picker · reset. */
+.col-grid {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 32px;
+  align-items: center;
+  gap: 10px;
+}
+
+.col-grid-head {
+  color: #6a7077;
+  font-size: 0.72rem;
+  padding: 0 0 2px;
+}
+
+.col-grid-head span {
+  text-align: center;
+}
+
+/* The scrollable swatch list — 20 amino acids can overflow a modal's height. */
+.col-swatches {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.col-swatch-row {
+  padding: 1px 0;
+}
+
+/* The residue preview: the actual cell fill with the letter drawn in the actual ink,
+ * so the row shows exactly what the grid will render. */
+.col-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 26px;
+  border: 1px solid #c2c7cc;
+  border-radius: 4px;
+  font-family: ui-monospace, "DejaVu Sans Mono", "Consolas", monospace;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+/* Native color inputs, stretched to the cell — the swatch fills the box. */
+.col-picker {
+  width: 100%;
+  height: 26px;
+  padding: 1px;
+  border: 1px solid #c2c7cc;
+  border-radius: 4px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.col-reset {
+  width: 28px;
+  height: 26px;
+  border: 1px solid #c2c7cc;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #41464b;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.col-reset:hover:not(:disabled) {
+  background: #f3f5f7;
+  border-color: #a9afb5;
+}
+
+.col-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (prefers-color-scheme: dark) {
+  .col-select {
+    background: #31353a;
+    border-color: #4a4f55;
+    color: #e3e6e9;
+  }
+  .col-check {
+    color: #cfd3d7;
+  }
+  .col-section {
+    border-top-color: #444;
+    color: #9aa0a7;
+  }
+  .col-grid-head {
+    color: #9aa0a7;
+  }
+  .col-preview {
+    border-color: #4a4f55;
+  }
+  .col-picker {
+    background: #31353a;
+    border-color: #4a4f55;
+  }
+  .col-reset {
+    background: #31353a;
+    border-color: #4a4f55;
+    color: #e3e6e9;
+  }
+  .col-reset:hover:not(:disabled) {
+    background: #3a3f44;
+    border-color: #5b6168;
+  }
+}

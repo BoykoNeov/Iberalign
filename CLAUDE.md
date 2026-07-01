@@ -84,6 +84,18 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
 - **Tests:** parser against messy fixtures; NW/SW vs hand-worked cases;
   coordinate round-trip + edit/undo invariants via `proptest`. Add a test only
   if it can fail for a real defect.
+- **Frontend test harness — two vitest projects** (config in `vite.config.ts`,
+  `import { defineConfig } from "vitest/config"`). **`node`** (default): pure
+  engine/model/render-math tests, files `*.test.ts`, no DOM. **`dom`**: React
+  component tests via **jsdom + React Testing Library** (`@testing-library/react`
+  + `jest-dom`), files **`*.dom.test.tsx`**, setup in `src/test/setup.ts`
+  (registers jest-dom matchers + `afterEach(cleanup)`). `npm test` (`vitest run`)
+  runs both; `npx vitest run --project dom` runs just the component tests. **Reach
+  for a `*.dom.test.tsx` for any presentational UI logic** — prop→callback flow,
+  enable/disable/visibility, keyboard/close handlers (e.g. `ColorsDialog.dom.test.tsx`).
+  It CANNOT assert canvas pixels / atlas rebuilds / live repaint — that stays GUI
+  smoke. Gotcha: `<input>` `onChange` is suppressed by React's value-tracker when the
+  new value equals the current one — drive a *distinct* value in `fireEvent.change`.
 
 ## Milestone status
 
@@ -587,6 +599,48 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   L cols` (plain whole-row path), not `Block-aligned cols …`. Smoke fixtures added:
   `fixtures/smoke-block-{dna,slack}.fasta`. Multi-select (non-adjacent rows) stays a separate
   gated milestone. Detail in `docs/plans/block-align-{plan,context,tasks}.md`.
+- **Custom per-residue color palettes — code complete + green; GUI smoke PASSED
+  (2026-07-01, user "all good").** Users pick a custom CELL fill and/or LETTER ink per
+  residue via a new **View → Colors…** dialog. **Pure frontend view state, ZERO Rust**
+  (coloring never crosses IPC / needs a capability — architecture invariant). Three
+  separate palettes (DNA / RNA / Protein) + a **Link DNA & RNA** toggle (default ON:
+  nucleotides share one palette). `render/colors.ts` gained the override machinery:
+  `PaletteOverrides` (per-residue `{fill?, ink?}`), `schemeWithOverrides(base,
+  overrides)` (bakes base + overrides → a fresh scheme; returns the base UNCHANGED when
+  empty; **content-hashed id** so the glyph atlas rebuilds on a color change and reuses
+  on none), `autoInk` (auto-contrast letter default: black on light fills, white on
+  dark), hex/rgb helpers, `resolveResidue` (effective color for the dialog swatches).
+  `ui/ColorsDialog.{tsx,css}` (swatch grid + base dropdown + link toggle + per-residue
+  ↺ / Reset-all); `Grid.tsx` keeps `palettes` per `AlphabetKey` + `linkDnaRna` +
+  `colorsOpen`, bakes the active alphabet's effective scheme and pushes it live to all
+  three renderers (grid / track / minimap), plus a keydown guard (`colorsOpenRef`) so
+  Delete/arrows/Ctrl+Z can't reach the grid behind the modal. **This batch also set up
+  the jsdom + RTL frontend test harness** (two vitest projects — see the "Frontend test
+  harness" convention above; `ColorsDialog.dom.test.tsx`, 16 component tests). **Bundled
+  fix (surfaced during the smoke):** the DNA/RNA consensus track colored IUPAC ambiguity
+  codes (`R Y S W K M D H V N`) with **protein** colors, because every scheme merged the
+  20-amino palette unconditionally and the color lookup is alphabet-agnostic (introduced
+  by the amino-acid coloring batch `2e948fe`; `B` alone fell to grey — the tell). Fixed
+  by **alphabet-scoping the palette**: `schemeForAlphabet(id, alphabet)` bakes two
+  variants per scheme (`makeSchemeVariants`) — DNA/RNA get a nucleotide-only variant so
+  ambiguity codes fall to the grey `fallback`; Protein keeps the full 20-amino palette.
+  Both variants share the public `id` (glyph atlas keys on it, but inks are uniform
+  `GLYPH_INK` in both, so no mis-cache). `Grid` picks the variant by `activeKey` before
+  `schemeWithOverrides`. Regression test in `colors.test.ts` (ambiguity → grey ≠ amino
+  for nucleotide; → amino for protein; A/C/G/T/U identical in both). **342 vitest** (314
+  node + 28 dom) + typecheck + build green. Detail in
+  `docs/plans/custom-colors-{plan,context,tasks}.md`.
+- **DNA/RNA ↔ Protein separate views + translation — DESIGN-ONLY (no code yet,
+  2026-07-01).** User wants protein and nucleotide as separate switchable views, with a
+  DNA/RNA view able to **translate** into a protein view (genetic-code picker deferred →
+  default NCBI table 1). **Two forks are OPEN pending a user decision:** (Q1) is a
+  translated protein view a real **Rust-owned `Alignment`** (editable/alignable, matches
+  "Rust owns truth") or a **frontend read-only projection** (cheap v1, matches the "click
+  converts it" phrasing)? (Q2) translate a **gapped** DNA alignment by **degap→translate**
+  per sequence (rec) or codon-through-the-alignment? Settled: translation is pure
+  `align-core` engine work (`translate.rs` + a 64-codon `GeneticCode`). The "no aligning
+  DNA vs protein" constraint is already largely satisfied (each alignment infers one
+  alphabet). Detail in `docs/plans/dna-protein-view-plan.md`.
 
 ## Dev-docs
 

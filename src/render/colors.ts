@@ -194,24 +194,46 @@ const AMINO_ACID_EXTRA: Record<string, Rgb> = {
 };
 
 /**
+ * Bake a scheme's two ALPHABET-SCOPED variants from its nucleotide palette. The
+ * `protein` variant merges the shared 20-color amino palette (nucleotide colors
+ * still win the merge); the `nucleotide` variant OMITS it, so a byte that is a
+ * nucleotide IUPAC AMBIGUITY code (`R Y S W K M B D H V N` — all but `B` are also
+ * amino one-letter codes) falls through to the grey `fallback` instead of taking a
+ * PROTEIN color. This matters because the consensus track emits those ambiguity
+ * codes for variable DNA/RNA columns; without scoping they'd render in amino colors
+ * (the bug). `Grid` picks the variant by the loaded alphabet via `schemeForAlphabet`.
+ * Both variants share the same public `id`: the glyph atlas keys on it, but glyph
+ * inks are the uniform `GLYPH_INK` in BOTH variants (only fills differ), so the
+ * shared id never mis-caches a glyph.
+ */
+function makeSchemeVariants(
+  id: string,
+  label: string,
+  nuc: Record<string, Rgb>,
+): { protein: ColorScheme; nucleotide: ColorScheme } {
+  return {
+    protein: makeScheme({ id, label, residues: { ...AMINO_ACID_EXTRA, ...nuc }, ...neutrals }),
+    nucleotide: makeScheme({ id, label, residues: { ...nuc }, ...neutrals }),
+  };
+}
+
+/**
  * Vivid nucleotide palette — bright, saturated red / yellow / green / blue. The
  * DEFAULT: chosen for maximum on-screen pop with solid-black letters. The blue is
  * a light azure (not navy) so black glyphs stay legible on it. For a palette
  * verified distinguishable under color-vision deficiency, switch to `colorblind`.
  */
-export const VIVID_SCHEME: ColorScheme = makeScheme({
-  id: "vivid",
-  label: "Vivid",
-  residues: {
-    ...AMINO_ACID_EXTRA, // protein: colors for the non-nucleotide amino acids
-    A: [34, 195, 42], // green  #22C32A
-    C: [46, 144, 255], // blue   #2E90FF — light azure, keeps black ink legible
-    G: [255, 210, 26], // yellow #FFD21A
-    T: [255, 42, 42], // red    #FF2A2A
-    U: [255, 42, 42], // U shares T
-  },
-  ...neutrals,
-});
+const VIVID_NUC: Record<string, Rgb> = {
+  A: [34, 195, 42], // green  #22C32A
+  C: [46, 144, 255], // blue   #2E90FF — light azure, keeps black ink legible
+  G: [255, 210, 26], // yellow #FFD21A
+  T: [255, 42, 42], // red    #FF2A2A
+  U: [255, 42, 42], // U shares T
+};
+const VIVID = makeSchemeVariants("vivid", "Vivid", VIVID_NUC);
+/** The full (protein-inclusive) vivid scheme — the app default. `schemeForAlphabet`
+ *  serves the nucleotide-scoped variant for DNA/RNA. */
+export const VIVID_SCHEME: ColorScheme = VIVID.protein;
 
 /**
  * Color-vision-deficiency-safe nucleotide palette — Paul Tol's *bright*
@@ -222,45 +244,43 @@ export const VIVID_SCHEME: ColorScheme = makeScheme({
  * which cannot be CVD-distinct (no 20-color set is) — the amino colors are chosen
  * for per-letter distinctness under normal vision, not CVD-safety.
  */
-export const COLORBLIND_SCHEME: ColorScheme = makeScheme({
-  id: "colorblind",
-  label: "Colorblind-safe",
-  residues: {
-    ...AMINO_ACID_EXTRA, // protein: colors for the non-nucleotide amino acids
-    A: [34, 136, 51], // green   #228833
-    C: [68, 119, 170], // blue    #4477AA
-    G: [204, 187, 68], // yellow  #CCBB44
-    T: [238, 102, 119], // red     #EE6677
-    U: [238, 102, 119], // U shares T
-  },
-  ...neutrals,
-});
+const COLORBLIND_NUC: Record<string, Rgb> = {
+  A: [34, 136, 51], // green   #228833
+  C: [68, 119, 170], // blue    #4477AA
+  G: [204, 187, 68], // yellow  #CCBB44
+  T: [238, 102, 119], // red     #EE6677
+  U: [238, 102, 119], // U shares T
+};
+const COLORBLIND = makeSchemeVariants("colorblind", "Colorblind-safe", COLORBLIND_NUC);
+export const COLORBLIND_SCHEME: ColorScheme = COLORBLIND.protein;
 
 /**
  * Conventional vivid nucleotide palette: A green, T/U red, C cyan, G magenta.
  * The "standard" mapping most viewers ship; offered alongside the CVD-safe
  * default so users can switch.
  */
-export const CLASSIC_SCHEME: ColorScheme = makeScheme({
-  id: "classic",
-  label: "Classic (vivid)",
-  residues: {
-    ...AMINO_ACID_EXTRA, // protein: colors for the non-nucleotide amino acids
-    A: [44, 160, 44], // green   #2CA02C
-    T: [227, 26, 28], // red     #E31A1C
-    U: [227, 26, 28], // U shares T
-    C: [0, 188, 212], // cyan    #00BCD4
-    G: [204, 46, 201], // magenta #CC2EC9
-  },
-  ...neutrals,
-});
+const CLASSIC_NUC: Record<string, Rgb> = {
+  A: [44, 160, 44], // green   #2CA02C
+  T: [227, 26, 28], // red     #E31A1C
+  U: [227, 26, 28], // U shares T
+  C: [0, 188, 212], // cyan    #00BCD4
+  G: [204, 46, 201], // magenta #CC2EC9
+};
+const CLASSIC = makeSchemeVariants("classic", "Classic (vivid)", CLASSIC_NUC);
+export const CLASSIC_SCHEME: ColorScheme = CLASSIC.protein;
 
 // Registry — the selectable set. Built-ins register at module load; callers add
-// custom schemes with `registerScheme` (e.g. from a color picker in the UI).
+// custom schemes with `registerScheme` (e.g. from a color picker in the UI). Each
+// built-in has TWO baked variants (see `makeSchemeVariants`): the full protein one
+// lives in `registry` (what the dialog lists + `getScheme` returns); the
+// nucleotide-scoped one lives in `nucRegistry`, served to DNA/RNA views by
+// `schemeForAlphabet` so IUPAC ambiguity codes don't take amino colors.
 const registry = new Map<string, ColorScheme>();
-registry.set(VIVID_SCHEME.id, VIVID_SCHEME);
-registry.set(COLORBLIND_SCHEME.id, COLORBLIND_SCHEME);
-registry.set(CLASSIC_SCHEME.id, CLASSIC_SCHEME);
+const nucRegistry = new Map<string, ColorScheme>();
+for (const v of [VIVID, COLORBLIND, CLASSIC]) {
+  registry.set(v.protein.id, v.protein);
+  nucRegistry.set(v.nucleotide.id, v.nucleotide);
+}
 
 /** Id of the scheme used when none is chosen / an unknown id is requested. */
 export const DEFAULT_SCHEME_ID = VIVID_SCHEME.id;
@@ -285,3 +305,182 @@ export function listSchemes(): ColorScheme[] {
 export function defaultScheme(): ColorScheme {
   return VIVID_SCHEME;
 }
+
+/**
+ * The alphabet-SCOPED base scheme for `id` — the seam that keeps a DNA/RNA
+ * consensus's IUPAC ambiguity codes (`R Y S W K M …`) from rendering in PROTEIN
+ * colors. DNA/RNA (any non-`"Protein"` alphabet) get the nucleotide-only variant,
+ * where those codes fall through to the grey `fallback`; `"Protein"` gets the full
+ * 20-amino variant. Falls back to the default scheme for an unknown id, like
+ * `getScheme`. `Grid` calls this (not `getScheme`) when building the effective
+ * scheme it pushes to the renderers.
+ */
+export function schemeForAlphabet(id: string, alphabet: string): ColorScheme {
+  if (alphabet === "Protein") return registry.get(id) ?? VIVID_SCHEME;
+  return nucRegistry.get(id) ?? registry.get(id) ?? VIVID.nucleotide;
+}
+
+// ---------------------------------------------------------------------------
+// Custom per-residue overrides (the "let the user choose custom colors" seam).
+//
+// A user palette is a base scheme + per-residue OVERRIDES: for any residue the
+// user can set its cell FILL and/or its letter INK. `schemeWithOverrides` bakes a
+// base `ColorScheme` + overrides into a fresh scheme (returns the base untouched
+// when there are no overrides, so an un-customized alphabet renders byte-for-byte
+// like the built-in). Grid keeps a separate override set per alphabet class (DNA /
+// RNA / Protein) — see `Grid.tsx`; this module is the pure color math.
+// ---------------------------------------------------------------------------
+
+/** A per-residue color override. Either field may be set independently: `fill`
+ *  recolors the cell, `ink` recolors the letter. An absent field falls back (fill →
+ *  the base scheme's color; ink → auto-contrast over the effective fill). */
+export interface ResidueOverride {
+  fill?: Rgb;
+  ink?: Rgb;
+}
+
+/** Per-residue overrides for one palette, keyed by UPPERCASE residue letter
+ *  (`"A"`, `"K"`, …). Lowercase bytes share their uppercase letter's override. */
+export type PaletteOverrides = Record<string, ResidueOverride>;
+
+/** Rec.601 luma of an sRGB color, 0..255. The same weighting the built-in palette's
+ *  glyph-legibility floor uses. */
+export function luma([r, g, b]: Rgb): number {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+const BLACK_INK: Rgb = [0, 0, 0];
+const WHITE_INK: Rgb = [255, 255, 255];
+
+/** Auto-contrast letter ink for a cell fill: black on a light fill, white on a dark
+ *  one, so a user-chosen color keeps a legible letter without the user having to also
+ *  pick an ink. The cutoff (luma ≥ 140) sits a touch above mid. NB this only applies
+ *  to CUSTOM fills — the built-in schemes' own colors keep their designed black ink
+ *  (they bypass `autoInk`), so a mid-luma built-in fill is unaffected by this cutoff. */
+export function autoInk(fill: Rgb): Rgb {
+  return luma(fill) >= 140 ? BLACK_INK : WHITE_INK;
+}
+
+/** `[r,g,b]` → `#rrggbb` (for an `<input type="color">` value). */
+export function rgbToHex([r, g, b]: Rgb): string {
+  const h = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+/** `#rgb` / `#rrggbb` → `[r,g,b]`. Unparseable input → black (a safe default; the
+ *  native color input only ever emits `#rrggbb`). */
+export function hexToRgb(hex: string): Rgb {
+  const s = hex.trim().replace(/^#/, "");
+  if (s.length === 3) {
+    const r = parseInt(s[0] + s[0], 16);
+    const g = parseInt(s[1] + s[1], 16);
+    const b = parseInt(s[2] + s[2], 16);
+    return [r, g, b];
+  }
+  if (s.length === 6) {
+    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+  }
+  return [0, 0, 0];
+}
+
+/** Parse a `rgb(r, g, b)` CSS string (what `makeScheme` bakes) back to `[r,g,b]`.
+ *  Used to read a base scheme's effective color for a residue when building the
+ *  Colors dialog swatches. Non-matching input → black. */
+export function parseRgbCss(css: string): Rgb {
+  const m = /rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/.exec(css);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
+}
+
+/** Uppercase-letter byte for a residue char (`"a"`→`0x41`, `"A"`→`0x41`). */
+function upperByteOf(ch: string): number {
+  return toUpperByte(ch.charCodeAt(0));
+}
+
+/**
+ * The EFFECTIVE cell fill + letter ink for one residue under `base` + `overrides`,
+ * as `Rgb` (for the dialog swatches). Fill = the override's fill, else the base
+ * scheme's color. Ink = the override's ink, else — when the FILL was overridden —
+ * auto-contrast over that fill, else the base scheme's ink (black for the built-ins).
+ */
+export function resolveResidue(
+  base: ColorScheme,
+  overrides: PaletteOverrides,
+  ch: string,
+): { fill: Rgb; ink: Rgb } {
+  const byte = upperByteOf(ch);
+  const ov = overrides[String.fromCharCode(byte)];
+  const fill = ov?.fill ?? parseRgbCss(base.fillStyleFor(byte));
+  let ink: Rgb;
+  if (ov?.ink) ink = ov.ink;
+  else if (ov?.fill) ink = autoInk(ov.fill);
+  else ink = parseRgbCss(base.inkStyleFor(byte));
+  return { fill, ink };
+}
+
+/** Stable djb2 hash of the overrides, so a scheme's id changes iff its colors do
+ *  (glyph atlases key their re-ink on `scheme.id`). Keys sorted for determinism. */
+function hashOverrides(overrides: PaletteOverrides): string {
+  const parts: string[] = [];
+  for (const key of Object.keys(overrides).sort()) {
+    const o = overrides[key];
+    parts.push(`${key}:${o.fill ? o.fill.join(",") : "-"}/${o.ink ? o.ink.join(",") : "-"}`);
+  }
+  const s = parts.join("|");
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * Bake a base scheme + per-residue overrides into a fresh `ColorScheme`. Returns
+ * `base` UNCHANGED when there are no overrides (so an un-customized alphabet is
+ * byte-identical to the built-in). Otherwise builds new 256-entry fill/ink tables:
+ * a residue's fill/ink is its override, falling back to the base; an overridden fill
+ * with no ink override takes auto-contrast ink. The id embeds a content hash so the
+ * grid/track glyph atlases (keyed on `scheme.id`) rebuild on any color change and
+ * reuse on none. Neutrals (gap/background/trailing/muted/accent/density) pass
+ * through from the base.
+ */
+export function schemeWithOverrides(base: ColorScheme, overrides: PaletteOverrides): ColorScheme {
+  const active = Object.keys(overrides).filter((k) => overrides[k].fill || overrides[k].ink);
+  if (active.length === 0) return base;
+
+  const fill = new Array<string>(256);
+  const ink = new Array<string>(256);
+  for (let b = 0; b < 256; b++) {
+    fill[b] = base.fillStyleFor(b);
+    ink[b] = base.inkStyleFor(b);
+  }
+  // Apply each override to BOTH the uppercase and lowercase byte of the residue
+  // (lowercase residues share their uppercase color, matching `makeScheme`).
+  for (const key of active) {
+    const upper = upperByteOf(key);
+    const lower = upper + 0x20;
+    const ov = overrides[key];
+    const effFill = ov.fill ?? parseRgbCss(base.fillStyleFor(upper));
+    let effInk: Rgb;
+    if (ov.ink) effInk = ov.ink;
+    else if (ov.fill) effInk = autoInk(ov.fill);
+    else effInk = parseRgbCss(base.inkStyleFor(upper));
+    const fillCss = rgbCss(effFill);
+    const inkCss = rgbCss(effInk);
+    for (const byte of [upper, lower]) {
+      if (byte < 0 || byte > 255) continue;
+      fill[byte] = fillCss;
+      ink[byte] = inkCss;
+    }
+  }
+  return {
+    ...base,
+    id: `custom-${base.id}-${hashOverrides(overrides)}`,
+    fillStyleFor: (byte) => fill[byte & 0xff],
+    inkStyleFor: (byte) => ink[byte & 0xff],
+  };
+}
+
+/** Residue letters shown in the Colors dialog for a given alphabet class. */
+export const NUCLEOTIDE_RESIDUES: readonly string[] = ["A", "C", "G", "T", "U"];
+export const AMINO_ACID_RESIDUES: readonly string[] = [
+  "A", "R", "N", "D", "C", "Q", "E", "G", "H", "I",
+  "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V",
+];

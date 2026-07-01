@@ -115,6 +115,8 @@ interface MenuBarProps {
   onSetBlockAlignMode: (mode: BlockAlignMode) => void;
   /** Open the consensus & coloring options modal. */
   onOpenConsensus: () => void;
+  /** Open the Colors (custom per-residue palette) modal. */
+  onOpenColors: () => void;
   /** The selectable color schemes + the active one's id (the View scheme picker). */
   schemes: ColorScheme[];
   schemeId: string;
@@ -194,6 +196,7 @@ export default function MenuBar(props: MenuBarProps) {
     blockAlignMode,
     onSetBlockAlignMode,
     onOpenConsensus,
+    onOpenColors,
     schemes,
     schemeId,
     onSetScheme,
@@ -399,6 +402,12 @@ export default function MenuBar(props: MenuBarProps) {
           value: schemeId,
           onSelect: onSetScheme,
           options: schemes.map((s) => ({ value: s.id, label: s.label })),
+        },
+        {
+          kind: "action",
+          key: "colors",
+          label: "Colors…",
+          onClick: onOpenColors,
         },
         {
           kind: "submenu",
