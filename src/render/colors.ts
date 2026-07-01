@@ -4,7 +4,10 @@
 // by id from the registry, or build a custom one with `makeScheme` and add it via
 // `registerScheme` (this is the seam for "let the user choose / customize colors").
 //
-// Three ship now (all nucleotide; protein schemes are later):
+// Three ship now. Each carries the same shared 20-color amino-acid palette (see
+// `AMINO_ACID_EXTRA`) so PROTEIN alignments get a distinct color per residue; the
+// nucleotide A/C/G/T/U colors below win the merge, so DNA/RNA rendering is
+// unchanged. The schemes differ in their nucleotide (and thus overall) look:
 //   - `vivid` (DEFAULT) — bright, saturated red/yellow/green/blue for maximum
 //     on-screen pop, paired with solid-black letters. The blue is a light azure
 //     (not navy) so black glyphs stay legible on it.
@@ -150,6 +153,47 @@ const neutrals = {
 };
 
 /**
+ * Per-residue colors for the 16 standard amino acids that are NOT also nucleotide
+ * letters. A/C/G/T/U keep each scheme's *nucleotide* color (Ala/Cys/Gly/Thr share
+ * those letters — "keep the letters that already have one"); this table colors the
+ * rest, so a PROTEIN alignment gets a distinct color for every amino acid instead
+ * of a sea of grey `fallback`. DNA/RNA sequences never contain these letters, so
+ * merging this in leaves nucleotide rendering byte-for-byte unchanged.
+ *
+ * The palette is a single shared table spread into every scheme (nucleotide colors
+ * win the merge). Values were machine-optimized (hill-climb) for two properties,
+ * pinned by `colors.test.ts`:
+ *   - black-glyph legibility: every fill's luma ≥ the darkest nucleotide we ship
+ *     (T-red ≈106), so the always-black `GLYPH_INK` stays readable;
+ *   - distinctness: within EACH scheme the full ~20-letter set is pairwise well
+ *     separated (min RGB distance ≈64, checked against every scheme's nucleotide
+ *     colors — incl. classic's magenta G and colorblind's muted set).
+ *
+ * NB per-letter distinctness is what the user asked for; it is NOT the same goal as
+ * CVD-safety. 20 colors cannot all be color-vision-deficiency-distinct — see the
+ * `colorblind` scheme note. This is a known, unavoidable limit of any 20-color
+ * per-residue protein palette.
+ */
+const AMINO_ACID_EXTRA: Record<string, Rgb> = {
+  D: [209, 123, 66], // Asp — orange-brown
+  E: [236, 131, 7], // Glu — orange
+  F: [234, 243, 132], // Phe — pale lime
+  H: [101, 222, 30], // His — green
+  I: [167, 233, 151], // Ile — light green
+  K: [160, 246, 213], // Lys — mint
+  L: [36, 191, 153], // Leu — teal
+  M: [22, 244, 233], // Met — cyan
+  N: [100, 146, 218], // Asn — blue
+  P: [154, 161, 252], // Pro — periwinkle
+  Q: [129, 83, 228], // Gln — indigo
+  R: [222, 164, 240], // Arg — light violet
+  S: [196, 108, 223], // Ser — purple
+  V: [253, 77, 228], // Val — magenta
+  W: [249, 44, 152], // Trp — pink
+  Y: [239, 153, 173], // Tyr — rose
+};
+
+/**
  * Vivid nucleotide palette — bright, saturated red / yellow / green / blue. The
  * DEFAULT: chosen for maximum on-screen pop with solid-black letters. The blue is
  * a light azure (not navy) so black glyphs stay legible on it. For a palette
@@ -159,6 +203,7 @@ export const VIVID_SCHEME: ColorScheme = makeScheme({
   id: "vivid",
   label: "Vivid",
   residues: {
+    ...AMINO_ACID_EXTRA, // protein: colors for the non-nucleotide amino acids
     A: [34, 195, 42], // green  #22C32A
     C: [46, 144, 255], // blue   #2E90FF — light azure, keeps black ink legible
     G: [255, 210, 26], // yellow #FFD21A
@@ -172,12 +217,16 @@ export const VIVID_SCHEME: ColorScheme = makeScheme({
  * Color-vision-deficiency-safe nucleotide palette — Paul Tol's *bright*
  * qualitative scheme (green/blue/yellow/red), documented distinguishable under
  * deuteranopia/protanopia. Selectable alongside the vivid default for users who
- * need it (its hexes are unchanged — the label's promise stays true).
+ * need it — the NUCLEOTIDE hexes are unchanged, so the label's promise holds for
+ * DNA/RNA. CAVEAT: for PROTEIN it falls back to the shared 20-color amino palette,
+ * which cannot be CVD-distinct (no 20-color set is) — the amino colors are chosen
+ * for per-letter distinctness under normal vision, not CVD-safety.
  */
 export const COLORBLIND_SCHEME: ColorScheme = makeScheme({
   id: "colorblind",
   label: "Colorblind-safe",
   residues: {
+    ...AMINO_ACID_EXTRA, // protein: colors for the non-nucleotide amino acids
     A: [34, 136, 51], // green   #228833
     C: [68, 119, 170], // blue    #4477AA
     G: [204, 187, 68], // yellow  #CCBB44
@@ -196,6 +245,7 @@ export const CLASSIC_SCHEME: ColorScheme = makeScheme({
   id: "classic",
   label: "Classic (vivid)",
   residues: {
+    ...AMINO_ACID_EXTRA, // protein: colors for the non-nucleotide amino acids
     A: [44, 160, 44], // green   #2CA02C
     T: [227, 26, 28], // red     #E31A1C
     U: [227, 26, 28], // U shares T

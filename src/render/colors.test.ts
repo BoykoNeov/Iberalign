@@ -61,8 +61,11 @@ describe("classic scheme — the conventional vivid mapping", () => {
   });
 
   it("maps unknown residues / ambiguity codes to the fallback, ≠ gap", () => {
-    expect(fill("N")).toBe(fill("Z")); // both fall through to fallback
-    expect(fill("N")).not.toBe(fill("-")); // fallback grey ≠ gap grey
+    // B (Asx), Z (Glx) are ambiguity codes, not among the 20 standard amino acids,
+    // so both fall through to fallback. (Standard amino acids like N are now colored
+    // — see the protein-palette test below.)
+    expect(fill("B")).toBe(fill("Z")); // both fall through to fallback
+    expect(fill("B")).not.toBe(fill("-")); // fallback grey ≠ gap grey
   });
 });
 
@@ -147,6 +150,57 @@ describe("coloring fills (muted / accent)", () => {
     });
     expect(s.mutedStyle).toBe("rgb(3, 3, 3)");
     expect(s.accentStyle).toBe("rgb(4, 5, 6)");
+  });
+});
+
+describe("protein amino-acid palette (per scheme)", () => {
+  // The 20 standard amino acids. A/C/G/T reuse the scheme's nucleotide color
+  // (Ala/Cys/Gly/Thr); the other 16 come from the shared `AMINO_ACID_EXTRA` table.
+  const AMINO = "ACDEFGHIKLMNPQRSTVWY".split("");
+  // The 16 amino-only letters we introduce here (A/C/G/T are excluded: they inherit
+  // each scheme's pre-existing nucleotide color, some of which are legitimately
+  // darker than our new-color floor — e.g. classic T-red, colorblind A-green).
+  const AMINO_EXTRA = "DEFHIKLMNPQRSVWY".split("");
+  // rgb() → [r,g,b]; luma is Rec.601 (matches the glyph-legibility floor we design to).
+  const rgb = (css: string): [number, number, number] => {
+    const m = css.match(/\d+/g)!;
+    return [Number(m[0]), Number(m[1]), Number(m[2])];
+  };
+  const luma = ([r, g, b]: [number, number, number]) => 0.299 * r + 0.587 * g + 0.114 * b;
+  const distSq = (a: number[], b: number[]) =>
+    (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+
+  // Floor = the darkest nucleotide fill we already ship (vivid T-red, luma ≈105.7):
+  // any amino color at least this light keeps the always-black glyph legible.
+  const LUMA_FLOOR = 105;
+  // Every amino pair must be clearly separated; the palette was optimized to ≈64,
+  // so 40 is a comfortable guard that still catches a real collision.
+  const MIN_DIST = 40;
+
+  for (const scheme of [VIVID_SCHEME, CLASSIC_SCHEME, COLORBLIND_SCHEME]) {
+    it(`[${scheme.id}] colors every new amino acid legibly for black glyphs`, () => {
+      for (const ch of AMINO_EXTRA) {
+        const c = rgb(scheme.fillStyleFor(ord(ch)));
+        expect(luma(c)).toBeGreaterThanOrEqual(LUMA_FLOOR);
+      }
+    });
+
+    it(`[${scheme.id}] gives every amino acid a distinct color`, () => {
+      const fills = AMINO.map((ch) => rgb(scheme.fillStyleFor(ord(ch))));
+      for (let i = 0; i < fills.length; i++) {
+        for (let j = i + 1; j < fills.length; j++) {
+          expect(distSq(fills[i], fills[j])).toBeGreaterThanOrEqual(MIN_DIST * MIN_DIST);
+        }
+      }
+    });
+  }
+
+  it("colors a standard amino acid that is not a nucleotide (regression: not grey fallback)", () => {
+    // D (Asp), W (Trp) are amino-acid-only letters — previously grey fallback.
+    for (const scheme of [VIVID_SCHEME, CLASSIC_SCHEME, COLORBLIND_SCHEME]) {
+      expect(scheme.fillStyleFor(ord("D"))).not.toBe(scheme.fillStyleFor(ord("B"))); // B = fallback
+      expect(scheme.fillStyleFor(ord("W"))).not.toBe(scheme.fillStyleFor(ord("B")));
+    }
   });
 });
 
