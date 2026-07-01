@@ -208,6 +208,68 @@ export async function msaAlign(
   return { numSeqs: wire.num_seqs, length: wire.length };
 }
 
+/** Overflow behavior for {@link blockAlign} when the optimal block is wider than
+ *  the selected window: `"fit"` (default) refuses and reports how many more
+ *  columns it would need; `"grow"` inserts the needed columns. */
+export type BlockAlignMode = "fit" | "grow";
+
+/** Outcome of {@link blockAlign}: how many sequences were aligned, the aligned
+ *  block width (`length`), whether the matrix grew, and — in Fit mode when the
+ *  block overflowed the window — how many more columns were needed (`fitOverflow`,
+ *  0 otherwise). `fitOverflow > 0` and `length === 0` both mean NO edit was made
+ *  (a Fit refusal / an all-gap window); the caller shows a message and skips the
+ *  buffer swap. Mirror of the Rust `BlockAlignResultDto`. */
+export interface BlockAlignResult {
+  numSeqs: number;
+  length: number;
+  grew: boolean;
+  fitOverflow: number;
+}
+
+interface BlockAlignResultWire {
+  num_seqs: number;
+  length: number;
+  grew: boolean;
+  fit_overflow: number;
+}
+
+/**
+ * Block / sub-area align: re-align only the selected rows' residues WITHIN the
+ * column window `[c0, c1]`, leaving every other cell untouched. Dispatches like
+ * {@link msaAlign} (2 rows under progressive ⇒ optimal pairwise; 3+/KAlign ⇒ the
+ * MSA), then reconciles the aligned block against the window: a block that fits is
+ * dropped in place (width preserved); one that overflows either refuses (`mode ===
+ * "fit"`) or inserts columns (`mode === "grow"`). Like the other align commands the
+ * matrix width may grow but the row count is unchanged — so this returns a small
+ * JSON status and the caller re-syncs its render buffer from `getRenderBuffer` when
+ * an edit was made (`length > 0 && fitOverflow === 0`). Undo/redo ride the normal
+ * width-changing path.
+ */
+export async function blockAlign(
+  rows: number[],
+  c0: number,
+  c1: number,
+  mode: BlockAlignMode,
+  engine?: string,
+): Promise<BlockAlignResult> {
+  const wire = await invoke<BlockAlignResultWire>("block_align", {
+    rows,
+    c0,
+    c1,
+    grow: mode === "grow",
+    engine: engine ?? null,
+    matrix: null,
+    gapOpen: null,
+    gapExtend: null,
+  });
+  return {
+    numSeqs: wire.num_seqs,
+    length: wire.length,
+    grew: wire.grew,
+    fitOverflow: wire.fit_overflow,
+  };
+}
+
 /** Undo the most recent edit. Empty result ⇒ nothing to undo. */
 export function undoEdit(): Promise<Uint8Array> {
   return editBuffer("undo_edit");

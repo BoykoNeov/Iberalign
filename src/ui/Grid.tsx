@@ -65,6 +65,9 @@ import {
   type PairwiseResult,
   msaAlign,
   type MsaResult,
+  blockAlign,
+  type BlockAlignResult,
+  type BlockAlignMode,
   undoEdit,
   redoEdit,
 } from "../ipc/edit";
@@ -217,6 +220,13 @@ export default function Grid({ view, onResized }: GridProps) {
   // otherwise). The ref shadows it for the effect-scoped `doAlign`, like the modes.
   const [alignEngine, setAlignEngine] = useState<AlignEngine>("progressive");
   const alignEngineRef = useRef<AlignEngine>("progressive");
+  // Block-align overflow behavior (Align → Block overflow), default `fit` — only
+  // consulted when a SUB-COLUMN selection triggers block align (a full-width
+  // selection aligns whole rows and ignores it). `fit` keeps the window width and
+  // refuses when the optimal block needs more columns; `grow` inserts them. The ref
+  // shadows it for the effect-scoped `doAlign`, like `alignEngine`.
+  const [blockAlignMode, setBlockAlignMode] = useState<BlockAlignMode>("fit");
+  const blockAlignModeRef = useRef<BlockAlignMode>("fit");
   // Consensus options (Phase 3). `consensusConfig === null` means "follow the
   // alphabet default" — the back-compat track behavior; a config is the user's
   // dialog override, applied LIVE (an effect pushes it to the track renderer +
@@ -422,6 +432,13 @@ export default function Grid({ view, onResized }: GridProps) {
   const handleSetAlignEngine = useCallback((engine: AlignEngine) => {
     alignEngineRef.current = engine;
     setAlignEngine(engine);
+  }, []);
+
+  // Pick the block-align overflow behavior (Fit | Grow) from the menu bar; mirror
+  // into the ref the effect-scoped `doAlign` reads.
+  const handleSetBlockAlignMode = useCallback((mode: BlockAlignMode) => {
+    blockAlignModeRef.current = mode;
+    setBlockAlignMode(mode);
   }, []);
 
   // Menu bar Del Rows / Del Cols buttons → the effect-scoped structural deletes.
@@ -994,15 +1011,19 @@ export default function Grid({ view, onResized }: GridProps) {
     doCutRef.current = doCut;
 
     // Align the SELECTED sequences in place, reversibly — replace their rows with
-    // their aligned form. Both paths are GLOBAL and lossless (every residue kept,
-    // so the edit round-trips) and align the WHOLE ungapped rows (the selection's
-    // column extent is ignored — sub-area/block align is future work):
-    //   - exactly 2 rows ⇒ the optimal pairwise Gotoh (Needleman–Wunsch).
-    //   - 3+ rows ⇒ the in-process progressive multiple-sequence aligner.
-    // Each command mutates the matrix (its width may grow) but leaves the row
-    // count, names, and alphabet unchanged, so we reuse `runEdit` to swap in the
-    // post-edit buffer (`getRenderBuffer`) — the fast in-place resize path, with
-    // undo/redo riding the normal width-changing route. Serialized via `editingRef`.
+    // their aligned form. Every path is GLOBAL and lossless (every residue kept, so
+    // the edit round-trips). The selection's COLUMN extent picks the flavor:
+    //   - FULL-WIDTH selection (spans every column — a name-gutter row select, or a
+    //     drag covering the whole width) ⇒ WHOLE-ROW align, exactly as before:
+    //       · exactly 2 rows (progressive) ⇒ the optimal pairwise Gotoh + score.
+    //       · 3+ rows, or any KAlign ⇒ the in-process progressive/KAlign MSA.
+    //   - SUB-COLUMN selection (`[c0,c1]` narrower than the width) ⇒ BLOCK align:
+    //     re-align only the windowed residues, leaving other cells put. Fit keeps
+    //     the window width (refuses when the block needs more cols); Grow inserts them.
+    // Each command mutates the matrix (its width may grow) but leaves the row count,
+    // names, and alphabet unchanged, so we reuse `runEdit` to swap in the post-edit
+    // buffer (`getRenderBuffer`) — the fast in-place resize path, with undo/redo
+    // riding the normal width-changing route. Serialized via `editingRef`.
     const doAlign = async () => {
       const v = viewRef.current;
       if (!v) return;
@@ -1011,13 +1032,54 @@ export default function Grid({ view, onResized }: GridProps) {
         showMsg("Select 2+ sequences to align", "warn");
         return;
       }
-      const { r0, r1 } = normalize(sel);
+      const { r0, r1, c0, c1 } = normalize(sel);
       const rows = r1 - r0 + 1;
       if (rows < 2) {
         showMsg("Select 2+ sequences to align", "warn");
         return;
       }
       const engine = alignEngineRef.current;
+      const rowList = Array.from({ length: rows }, (_, i) => r0 + i);
+
+      // SUB-COLUMN selection ⇒ block align over the window [c0,c1]. A full-width
+      // selection (`c0 == 0 && c1 == width-1`) falls through to the whole-row path
+      // below, which is left byte-for-byte unchanged (block align is additive).
+      const fullWidth = c0 === 0 && c1 === v.width - 1;
+      if (!fullWidth) {
+        const mode = blockAlignModeRef.current;
+        let result: BlockAlignResult | null = null;
+        await runEdit(async () => {
+          result = await blockAlign(rowList, c0, c1, mode, engine);
+          // A Fit overflow or an all-gap window makes NO edit — return an empty
+          // buffer so `runEdit` skips the (no-op) repaint; the message is derived
+          // from `result` below. (An in-flight guard leaves `result` null ⇒ silent.)
+          if (!result || result.length === 0 || result.fitOverflow > 0) {
+            return new Uint8Array(0);
+          }
+          return await getRenderBuffer();
+        });
+        if (result) {
+          const r: BlockAlignResult = result;
+          if (r.length === 0) {
+            showMsg("Nothing to align (the selected window is all gaps)", "warn");
+          } else if (r.fitOverflow > 0) {
+            const cols = r.fitOverflow === 1 ? "column" : "columns";
+            showMsg(
+              `Optimal alignment needs ${r.fitOverflow} more ${cols} than selected — widen the selection or switch Block overflow to Grow`,
+              "warn",
+            );
+          } else {
+            const via = engine === "kalign" ? " · KAlign" : "";
+            const grown = r.grew ? " (grown)" : "";
+            showMsg(
+              `Block-aligned cols ${c0 + 1}–${c1 + 1} · ${r.numSeqs} seqs · ${r.length} cols${grown}${via}`,
+            );
+          }
+        }
+        return;
+      }
+
+      // ---- WHOLE-ROW align (full-width selection) — unchanged ----
       // Exactly 2 rows under the progressive engine ⇒ the optimal pairwise Gotoh,
       // which also yields a score/%identity readout. KAlign has no pairwise score
       // and aligns N≥2 uniformly, so it (and every 3+ case) goes through the MSA path.
@@ -1043,7 +1105,6 @@ export default function Grid({ view, onResized }: GridProps) {
         return;
       }
       // N≥2 via the selected MSA engine over the contiguous selected rows.
-      const rowList = Array.from({ length: rows }, (_, i) => r0 + i);
       let result: MsaResult | null = null;
       const ok = await runEdit(async () => {
         result = await msaAlign(rowList, engine);
@@ -1763,6 +1824,8 @@ export default function Grid({ view, onResized }: GridProps) {
         onAlign={handleAlign}
         alignEngine={alignEngine}
         onSetAlignEngine={handleSetAlignEngine}
+        blockAlignMode={blockAlignMode}
+        onSetBlockAlignMode={handleSetBlockAlignMode}
         onOpenConsensus={openConsensus}
         schemes={SCHEMES}
         schemeId={schemeId}

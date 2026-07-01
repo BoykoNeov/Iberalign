@@ -27,6 +27,7 @@ pub fn run() {
             commands::delete_columns,
             commands::pairwise_align,
             commands::msa_align,
+            commands::block_align,
             commands::undo_edit,
             commands::redo_edit
         ])

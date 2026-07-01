@@ -14,37 +14,46 @@ session; multi-select is a later, explicitly-gated milestone.
 - [ ] Update `m3-tasks.md` "Deferred" section to point at these docs (optional
       tidy; do when block align actually lands)
 
-## Block / sub-area align (NEXT SESSION — code + GUI smoke)
+## Block / sub-area align — CODE COMPLETE + GREEN (2026-07-01); GUI smoke pending
 
-### Engine / command (`src-tauri`, reusing `align-core`)
-- [ ] `block_align(rows, c0, c1, …, grow: bool, engine?, matrix?, gap_open?,
-      gap_extend?)` command: extract each row's **windowed** ungapped residues
-      (gapped bytes in `[c0,c1]` minus `is_gap`); dispatch 2-row→`pairwise`,
-      3+/KAlign→`progressive_align`/`kalign_align` (same logic as `doAlign`)
-- [ ] Width reconcile: `wblock==worig` / `wblock<worig` ⇒ `SetCells` (gap-pad tail
-      to `worig`); `wblock>worig` + Grow ⇒ mixed `SpliceRows` (replace selected,
-      insert `g` gaps at `c1+1` non-selected); `wblock>worig` + Fit ⇒ no edit +
-      "needs N more cols" signal
-- [ ] `wblock==0` guard (all-gap window) ⇒ no edit + "nothing to align"
-- [ ] Stale-index guard: clamp `r1`, bail `r0 >= num_rows` (copy `cut_shorten_writes`)
-- [ ] Reuse/extend a DTO (`grew` / `fitOverflow` field for the UI message)
-- [ ] Register in `lib.rs`
-- [ ] Tests: `wblock==worig` drop-in; `wblock<worig` gap-pad; Grow insert +
-      undo round-trip; Fit-overflow makes no edit; **losslessness** (degapped
-      residues byte-identical before/after; out-of-window cells untouched);
-      rectangularity after Grow; all-gap-window no-op
+### Engine / command (`src-tauri`, reusing `align-core`) ✅
+- [x] `block_align(rows, c0, c1, grow, engine?, matrix?, gap_open?, gap_extend?)`
+      command: extract each row's **windowed** ungapped residues via
+      `block_window_seqs` (gapped bytes in `[c0,c1]` minus `coords::is_gap`);
+      dispatch 2-row→`pairwise`, 3+/KAlign→`progressive_align`/`kalign_align`
+      (same logic as `doAlign`; KAlign branch cfg-gated verbatim from `msa_align`)
+- [x] Width reconcile in the pure `block_align_cmd` → `BlockPlacement` enum:
+      `wblock<=worig` ⇒ `Fit(SetCells)` (left-justify + gap-pad tail to `worig`);
+      `wblock>worig` + Grow ⇒ `Grow(SpliceRows)` (replace selected window, insert
+      `g` gaps at `c1+1==c0+worig` in non-selected — append-at-`width` on a
+      right-edge window); `wblock>worig` + Fit ⇒ `Overflow(g)` (no edit)
+- [x] `wblock==0` guard (all-gap window) ⇒ no edit, `length:0` DTO
+- [x] Column clamp done ONCE in the command (`c1 = c1.min(width-1)`; `worig`
+      derived from the clamped `c1`); row list validated (sorted/dedup/≥2/in-bounds)
+- [x] `BlockAlignResultDto { num_seqs, length, grew, fit_overflow }`
+- [x] Register in `lib.rs`
+- [x] Tests (8): window extraction; `wblock==worig` drop-in; `wblock<worig`
+      gap-pad; Grow insert + undo round-trip; **right-edge Grow** (insert at
+      `col==width`); **cols-mode all-rows Fit preserves width (no shrink)**;
+      Fit-overflow makes no edit; **a seam test driving the REAL `pairwise`
+      end-to-end** (extraction → aligner → reconcile → apply, lossless) — the other
+      7 feed synthetic blocks, so this closes the extraction/dispatch seam
+      (advisor-flagged). Losslessness (degapped residues byte-identical) +
+      out-of-window-untouched + rectangularity asserted inside the drop-in/grow tests.
 
-### Frontend (`src`)
-- [ ] `ipc/edit.ts`: `blockAlign(...)` wrapper + camelCase type + `fromWire`
-- [ ] `MenuBar.tsx`: Align → **Mode** submenu (`Grow | Fit`, default `Fit`);
-      `BlockAlignMode` type + `blockAlignMode`/`onSetBlockAlignMode` props (mirror
-      `CutMode`/`onSetCutMode`)
-- [ ] `Grid.tsx`: `blockAlignMode` state + ref; `doAlign` branches on full-width
-      vs sub-column selection (`normalize` → `c0,c1`, compare to `width`); block
-      branch calls `blockAlign(rows, c0, c1, mode)`; whole-row branch unchanged
-- [ ] Status readout names the mode it took (`Block-aligned cols a–b · L cols` vs
-      `Aligned N sequences · L cols`); Fit-overflow → warn message "widen or Grow"
-- [ ] typecheck + vitest + build green
+### Frontend (`src`) ✅
+- [x] `ipc/edit.ts`: `blockAlign(rows,c0,c1,mode,engine?)` wrapper + `BlockAlignMode`
+      + `BlockAlignResult` types + `fromWire`
+- [x] `MenuBar.tsx`: Align → **Block overflow** submenu (`Fit | Grow`, default
+      `Fit`); `blockAlignMode`/`onSetBlockAlignMode` props (mirror the Engine
+      submenu). `BlockAlignMode` imported from `ipc/edit` (domain type)
+- [x] `Grid.tsx`: `blockAlignMode` state + ref + handler; `doAlign` branches on
+      `fullWidth = c0===0 && c1===v.width-1` — full-width ⇒ whole-row path
+      (byte-for-byte unchanged); else ⇒ `blockAlign(rowList, c0, c1, mode, engine)`.
+      Fit-overflow / all-gap return an empty buffer so `runEdit` skips the repaint.
+- [x] Status readout: `Block-aligned cols a–b · N seqs · L cols [(grown)] [· KAlign]`;
+      Fit-overflow → warn "needs N more cols — widen or switch Block overflow to Grow"
+- [x] typecheck + 295 vitest + build green (clippy `-D warnings` + fmt clean; 43 iberalign tests)
 
 ### GUI smoke (next session, after code-complete)
 - [ ] Sub-column select 2 rows → Align → only the window re-aligns; cells outside

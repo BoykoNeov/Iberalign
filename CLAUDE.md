@@ -537,6 +537,40 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   KAlign + decide release-shipping (kalign-on release build). **Deferred:** pure-Rust POA
   (dropped per user — build proven so the seam-prover was redundant); block/sub-area align.
   Detail in `docs/plans/extern-aligner-{plan,context,tasks}.md`.
+- **Block / sub-area align — code complete + green; GUI smoke pending (2026-07-01).**
+  The M3-deferred "align only this region" thread, built per the 2026-06-30 design
+  (`docs/plans/block-align-*`). "Align selected sequences" now branches on the selection's
+  COLUMN extent: a **full-width** selection (`c0==0 && c1==width-1`) keeps the whole-row
+  align path **byte-for-byte unchanged**; a **sub-column** selection re-aligns only the
+  windowed ungapped residues `[c0,c1]` of the selected rows, leaving every other cell put.
+  Overflow behavior is a new **Align → Block overflow** submenu (`Fit | Grow`, default
+  **Fit**, user-decided): **Fit** keeps the window width (left-justify + gap-pad; refuses
+  with "needs N more cols — widen or switch to Grow" when the optimal block is wider);
+  **Grow** inserts the needed columns at the block's right edge (selected rows replace their
+  window, non-selected rows get gap columns — every row grows by the same `g`, stays
+  rectangular). **No new `EditCmd`, no constrained-width DP** (advisor-greenlit): Fit is a
+  width-preserving `SetCells`, Grow is a mixed `SpliceRows` (the `realign_splice`/`msa_splice`
+  shape windowed to a column range). **Backend** (`commands.rs`): pure `block_window_seqs`
+  (extract windowed residues, gaps dropped) + `block_align_cmd → BlockPlacement{Fit|Grow|
+  Overflow}` (the tested reconcile core) + the `block_align` command (row-list validate,
+  column clamp ONCE with `worig` from the clamped `c1`, engine dispatch mirroring `doAlign`
+  incl. the cfg-gated KAlign branch, `wblock==0` all-gap guard) → `BlockAlignResultDto
+  {num_seqs, length, grew, fit_overflow}`; registered in `lib.rs`. **Losslessness is by
+  construction** (residues re-arranged, not changed) — pinned in tests. **Frontend**:
+  `ipc/edit.ts::blockAlign` + `BlockAlignMode`/`BlockAlignResult`; `MenuBar` Block-overflow
+  submenu; `Grid.tsx::doAlign` full-width-vs-sub-column branch (Fit-overflow / all-gap return
+  an empty buffer so `runEdit` skips the no-op repaint; readout `Block-aligned cols a–b · N
+  seqs · L cols [(grown)]`). Undo/redo ride the existing width-changing route (no new wiring —
+  row count is preserved, so the paste row-count-resync landmine does not apply). 8 new
+  iberalign tests (drop-in / gap-pad / Grow+undo / right-edge Grow append-at-`width` /
+  cols-mode all-rows Fit no-shrink / Fit-overflow no-edit / window extraction / a **seam
+  test driving the REAL `pairwise` end-to-end** — advisor-flagged, since the other 7 feed
+  synthetic aligned blocks); align-core 54 / iberalign 43 / 295 vitest / clippy `-D warnings`
+  + fmt + typecheck + build green. **Only
+  the GUI smoke remains** (sub-column re-aligns just the window + neighbors untouched + Ctrl+Z;
+  Fit slack packs / tight refuses; Grow inserts; 3+/KAlign; full-width regression;
+  all-gap window). Multi-select (non-adjacent rows) stays a separate gated milestone. Detail
+  in `docs/plans/block-align-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

@@ -29,6 +29,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CopyFormat } from "../model/copy";
 import type { GridColoring, TrackColoring } from "../model/coloring";
+import type { BlockAlignMode } from "../ipc/edit";
 import type { ColorScheme } from "../render/colors";
 import "./MenuBar.css";
 
@@ -106,6 +107,12 @@ interface MenuBarProps {
   /** The active MSA backend (the Align → Engine submenu). */
   alignEngine: AlignEngine;
   onSetAlignEngine: (engine: AlignEngine) => void;
+  /** Block-align overflow behavior (the Align → Mode submenu). Only applies when a
+   *  SUB-COLUMN selection triggers block align; a full-width selection aligns whole
+   *  rows and ignores it. `fit` (default) refuses to grow past the window; `grow`
+   *  inserts the needed columns. */
+  blockAlignMode: BlockAlignMode;
+  onSetBlockAlignMode: (mode: BlockAlignMode) => void;
   /** Open the consensus & coloring options modal. */
   onOpenConsensus: () => void;
   /** The selectable color schemes + the active one's id (the View scheme picker). */
@@ -184,6 +191,8 @@ export default function MenuBar(props: MenuBarProps) {
     onAlign,
     alignEngine,
     onSetAlignEngine,
+    blockAlignMode,
+    onSetBlockAlignMode,
     onOpenConsensus,
     schemes,
     schemeId,
@@ -355,6 +364,25 @@ export default function MenuBar(props: MenuBarProps) {
               value: "kalign",
               label: "KAlign",
               title: "Bundled KAlign v3 — higher quality (MUSCLE/Clustal-tier)",
+            },
+          ],
+        },
+        {
+          kind: "submenu",
+          key: "blockmode",
+          label: "Block overflow",
+          value: blockAlignMode,
+          onSelect: (v) => onSetBlockAlignMode(v as BlockAlignMode),
+          options: [
+            {
+              value: "fit",
+              label: "Fit",
+              title: "Block align (sub-column select): keep the window width — refuse if the alignment needs more columns",
+            },
+            {
+              value: "grow",
+              label: "Grow",
+              title: "Block align (sub-column select): insert columns when the aligned block is wider than the window",
             },
           ],
         },

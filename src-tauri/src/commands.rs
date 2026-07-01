@@ -1096,6 +1096,277 @@ pub async fn msa_align(
     })
 }
 
+// ---- block / sub-area alignment --------------------------------------------
+
+/// Outcome of [`block_align`]: how many sequences were aligned, the aligned block
+/// width (`length`), whether the matrix GREW (Grow inserted columns), and — in Fit
+/// mode when the optimal block overflowed the window — how many more columns it
+/// would have needed (`fit_overflow`, 0 otherwise). When `fit_overflow > 0` **no
+/// edit was made** (Fit refuses rather than growing); the caller turns it into a
+/// "widen or Grow" message. `length == 0` likewise means no edit (an all-gap
+/// window — nothing to align). Otherwise an edit was applied and the caller
+/// re-syncs its render buffer from [`get_render_buffer`] (`grew` ⇒ the width grew).
+#[derive(Serialize)]
+pub struct BlockAlignResultDto {
+    pub num_seqs: usize,
+    pub length: usize,
+    pub grew: bool,
+    pub fit_overflow: usize,
+}
+
+/// The selected rows' UNGAPPED residues **within the column window** `[c0, c1]`:
+/// the gapped bytes in that span with gaps dropped. This is what block align
+/// re-aligns — only the windowed residues, not the whole rows. Reads rows
+/// directly, so callers must have validated the row indices and `c0 <= c1 < width`
+/// first (the command clamps + guards, mirroring [`cut_shorten_writes`]).
+fn block_window_seqs(ds: &Dataset, rows: &[usize], c0: usize, c1: usize) -> Vec<Vec<u8>> {
+    rows.iter()
+        .map(|&row| {
+            ds.alignment.rows[row].gapped[c0..=c1]
+                .iter()
+                .copied()
+                .filter(|&b| !align_core::coords::is_gap(b))
+                .collect()
+        })
+        .collect()
+}
+
+/// How an aligned block (`wblock = aligned[0].len()` columns) reconciles against
+/// the selected window (`worig` columns) — the pure core of block align.
+enum BlockPlacement {
+    /// `wblock <= worig`: the block fits — a width-PRESERVING [`EditCmd::SetCells`]
+    /// that left-justifies each aligned row in the window and gap-pads the tail to
+    /// `worig`. Cells outside the window (and every non-selected row) are untouched.
+    Fit(EditCmd),
+    /// `wblock > worig` + Grow: a width-GROWING [`EditCmd::SpliceRows`] that inserts
+    /// `wblock - worig` columns at the block's right edge — selected rows replace
+    /// their window with the aligned block, non-selected rows get gap columns — so
+    /// every row grows by the same delta and stays rectangular.
+    Grow(EditCmd),
+    /// `wblock > worig` + Fit: the optimal block is wider than the window and Fit
+    /// refuses to grow. No edit; the field is how many more columns it would need.
+    Overflow(usize),
+}
+
+/// Reconcile an aligned block against its window and build the ONE reversible edit
+/// (or an overflow refusal). `aligned[i]` is the aligned form of `rows[i]`'s
+/// windowed residues (all share width `wblock`); `worig = c1 - c0 + 1`. See
+/// [`BlockPlacement`] for the three cases. No new [`EditCmd`] variant is needed —
+/// Fit is a `SetCells`, Grow is a `SpliceRows` — and residues are re-arranged, not
+/// changed, so undo is lossless by construction. Callers guard `wblock == 0` (an
+/// all-gap window) before calling; here `wblock == 0 <= worig` would land in Fit
+/// and gap-fill the window, which the caller avoids by short-circuiting.
+fn block_align_cmd(
+    ds: &Dataset,
+    rows: &[usize],
+    c0: usize,
+    worig: usize,
+    aligned: &[Vec<u8>],
+    grow: bool,
+) -> BlockPlacement {
+    let wblock = aligned.first().map(|r| r.len()).unwrap_or(0);
+
+    if wblock <= worig {
+        // Fits: left-justify the aligned block in [c0, c0+worig) and gap-pad the
+        // tail back to `worig` — a per-row in-place overwrite (width preserved).
+        let writes = rows
+            .iter()
+            .zip(aligned)
+            .map(|(&row, ab)| {
+                let mut bytes = ab.clone();
+                bytes.resize(worig, b'-');
+                CellWrite {
+                    row,
+                    col: c0,
+                    bytes,
+                }
+            })
+            .collect();
+        return BlockPlacement::Fit(EditCmd::SetCells { writes });
+    }
+
+    if !grow {
+        return BlockPlacement::Overflow(wblock - worig);
+    }
+
+    // Grow: insert `g` columns at the block's right edge (`c1 + 1 == c0 + worig`).
+    // Selected rows replace their window `[c0, c1]` (`remove = worig`) with the
+    // aligned block (`wblock` bytes); non-selected rows insert `g` gap cells there
+    // (`remove = 0`). Both deltas are `+g`, so every row ends width `width + g`.
+    let g = wblock - worig;
+    let n = ds.alignment.num_rows();
+    let insert_col = c0 + worig; // == c1 + 1
+    let mut selected = vec![false; n];
+    let mut splices = Vec::with_capacity(n);
+    for (&row, ab) in rows.iter().zip(aligned) {
+        selected[row] = true;
+        splices.push(RowSplice {
+            row,
+            col: c0,
+            remove: worig,
+            bytes: ab.clone(),
+        });
+    }
+    let tail = vec![b'-'; g];
+    for (r, &is_sel) in selected.iter().enumerate() {
+        if !is_sel {
+            splices.push(RowSplice {
+                row: r,
+                col: insert_col,
+                remove: 0,
+                bytes: tail.clone(),
+            });
+        }
+    }
+    BlockPlacement::Grow(EditCmd::SpliceRows { splices })
+}
+
+/// Block / sub-area align: re-align only the selected rows' residues **within the
+/// column window** `[c0, c1]`, leaving every other cell (other rows, and the
+/// selected rows' cells outside the window) untouched. The windowed ungapped
+/// residues are extracted, aligned with the same engine as the whole-row path
+/// (2 rows under the progressive engine ⇒ optimal pairwise Gotoh; 3+/KAlign ⇒ the
+/// progressive/KAlign MSA), then reconciled against the window width: a block that
+/// fits is dropped in place (width preserved); one that overflows either refuses
+/// (Fit, `grow == false`) or inserts the needed columns (Grow). One reversible edit
+/// per call. `matrix`/`gap_open`/`gap_extend` default to the alphabet widened over
+/// the selected rows. Errors if nothing is loaded, fewer than two distinct rows are
+/// selected, a row is out of bounds, or the column range is invalid.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn block_align(
+    rows: Vec<usize>,
+    c0: usize,
+    c1: usize,
+    grow: bool,
+    engine: Option<String>,
+    matrix: Option<String>,
+    gap_open: Option<i32>,
+    gap_extend: Option<i32>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<BlockAlignResultDto, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let AppState { dataset, history } = &mut *guard;
+    let ds = dataset
+        .as_mut()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+
+    let n = ds.alignment.num_rows();
+    // Normalize + validate the row list: in-bounds, sorted, deduped, ≥2 distinct.
+    let mut rows = rows;
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.len() < 2 {
+        return Err("select at least two different sequences to align".to_string());
+    }
+    if *rows.last().expect("non-empty after the len check") >= n {
+        return Err(format!("row out of bounds (alignment has {n} rows)"));
+    }
+
+    // Clamp the column window ONCE, here, and derive `worig` from the clamped `c1`
+    // so the extractor and the width math never disagree (a stale selection index
+    // must clamp, not panic — the same discipline as `cut_shorten_writes`).
+    let width = ds.alignment.width;
+    if width == 0 {
+        return Err("nothing to align (the alignment is empty)".to_string());
+    }
+    let c1 = c1.min(width - 1);
+    if c0 > c1 {
+        return Err("invalid column range".to_string());
+    }
+    let worig = c1 - c0 + 1;
+
+    // Default the matrix/scoring by widening the alphabet over ALL selected rows.
+    let alphabet = rows
+        .iter()
+        .map(|&r| ds.sequences[r].alphabet)
+        .reduce(|acc, a| acc.widen(a))
+        .expect("at least two rows");
+    let matrix = match &matrix {
+        Some(name) => {
+            SubstitutionMatrix::by_name(name).ok_or_else(|| format!("unknown matrix '{name}'"))?
+        }
+        None => SubstitutionMatrix::default_for(alphabet),
+    };
+    let defaults = Scoring::default_for(alphabet);
+    let scoring = Scoring {
+        gap_open: gap_open.unwrap_or(defaults.gap_open),
+        gap_extend: gap_extend.unwrap_or(defaults.gap_extend),
+    };
+    let engine = match &engine {
+        Some(name) => {
+            MsaEngine::from_name(name).ok_or_else(|| format!("unknown align engine '{name}'"))?
+        }
+        None => MsaEngine::Progressive,
+    };
+
+    // Extract + align the windowed residues (a fresh alignment ignores prior gaps).
+    let seqs = block_window_seqs(ds, &rows, c0, c1);
+    let refs: Vec<&[u8]> = seqs.iter().map(|v| v.as_slice()).collect();
+    // Exactly 2 rows under the progressive engine ⇒ the optimal pairwise Gotoh
+    // (identical to the whole-row path, just windowed input); everything else routes
+    // through the MSA backend, which returns rows in input order too.
+    let (aligned, wblock): (Vec<Vec<u8>>, usize) =
+        if rows.len() == 2 && engine == MsaEngine::Progressive {
+            let r = pairwise(refs[0], refs[1], &matrix, AlignMode::Global, scoring);
+            let w = r.aligned_a.len();
+            (vec![r.aligned_a, r.aligned_b], w)
+        } else {
+            let result = match engine {
+                MsaEngine::Progressive => progressive_align(&refs, &matrix, scoring),
+                MsaEngine::Kalign => {
+                    #[cfg(feature = "kalign")]
+                    {
+                        align_extern::kalign_align(&refs, alphabet).map_err(|e| e.to_string())?
+                    }
+                    #[cfg(not(feature = "kalign"))]
+                    {
+                        let _ = (&refs, alphabet, &matrix, scoring);
+                        return Err(
+                            "the KAlign engine is not built into this binary (rebuild with \
+                             --features kalign)"
+                                .to_string(),
+                        );
+                    }
+                }
+            };
+            let w = result.length;
+            (result.rows, w)
+        };
+
+    // Every selected row all-gap in the window ⇒ width 0 — nothing to align; skip
+    // the edit (mirror the whole-row `length == 0` guard).
+    if wblock == 0 {
+        return Ok(BlockAlignResultDto {
+            num_seqs: rows.len(),
+            length: 0,
+            grew: false,
+            fit_overflow: 0,
+        });
+    }
+
+    let (grew, overflow) = match block_align_cmd(ds, &rows, c0, worig, &aligned, grow) {
+        BlockPlacement::Fit(cmd) => {
+            history.apply(ds, cmd).map_err(|e| e.to_string())?;
+            (false, 0)
+        }
+        BlockPlacement::Grow(cmd) => {
+            history.apply(ds, cmd).map_err(|e| e.to_string())?;
+            (true, 0)
+        }
+        BlockPlacement::Overflow(by) => (false, by),
+    };
+
+    Ok(BlockAlignResultDto {
+        num_seqs: rows.len(),
+        length: wblock,
+        grew,
+        fit_overflow: overflow,
+    })
+}
+
 /// Undo the most recent edit; returns the post-edit render buffer (empty when
 /// there is nothing to undo). Errors if nothing is loaded.
 #[tauri::command]
@@ -1795,5 +2066,204 @@ mod tests {
         history.undo(&mut ds).unwrap();
         assert_eq!(ds.alignment.width, 4);
         assert_eq!(ds.alignment.rows[2].gapped, b"GGGG");
+    }
+
+    // ---- block / sub-area align --------------------------------------------
+
+    /// Unwrap a Fit/Grow placement to its edit; a Fit-overflow refusal is a test bug.
+    fn placement_cmd(p: BlockPlacement) -> EditCmd {
+        match p {
+            BlockPlacement::Fit(cmd) | BlockPlacement::Grow(cmd) => cmd,
+            BlockPlacement::Overflow(by) => panic!("unexpected Fit overflow needing {by} cols"),
+        }
+    }
+
+    /// A row's ungapped residues — the losslessness invariant reads these.
+    fn degapped(ds: &Dataset, row: usize) -> Vec<u8> {
+        ds.alignment.rows[row]
+            .gapped
+            .iter()
+            .copied()
+            .filter(|&b| !align_core::coords::is_gap(b))
+            .collect()
+    }
+
+    #[test]
+    fn block_window_seqs_extracts_windowed_ungapped_residues() {
+        // Only the residues inside the column window, gaps dropped — the whole
+        // point of block align (not the whole row).
+        let ds = Dataset::from_records(&[rec("a", "A-CGT"), rec("b", "AG--T")]);
+        // cols 1..=3: row a "-CG" ⇒ "CG"; row b "G--" ⇒ "G".
+        assert_eq!(
+            block_window_seqs(&ds, &[0, 1], 1, 3),
+            vec![b"CG".to_vec(), b"G".to_vec()]
+        );
+    }
+
+    #[test]
+    fn block_align_fit_dropin_when_block_equals_window() {
+        // wblock == worig ⇒ a width-preserving SetCells drop-in over [c0,c1]; only
+        // the selected rows' window changes, other rows + out-of-window cells stay.
+        let mut ds =
+            Dataset::from_records(&[rec("a", "ACGTA"), rec("b", "AC-TA"), rec("c", "GGGGG")]);
+        let mut history = align_core::EditStack::new();
+        // Rows 0,1, window cols 1..=3 (worig 3). Window residues: a "CGT", b "CT".
+        let aligned = vec![b"CGT".to_vec(), b"-CT".to_vec()];
+        let cmd = placement_cmd(block_align_cmd(&ds, &[0, 1], 1, 3, &aligned, false));
+        assert!(matches!(cmd, EditCmd::SetCells { .. }));
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 5); // preserved
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGTA");
+        assert_eq!(ds.alignment.rows[1].gapped, b"A-CTA");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGGGG"); // untouched
+                                                           // Lossless: degapped residues unchanged for every row.
+        assert_eq!(degapped(&ds, 0), b"ACGTA");
+        assert_eq!(degapped(&ds, 1), b"ACTA");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.rows[1].gapped, b"AC-TA");
+    }
+
+    #[test]
+    fn block_align_fit_gap_pads_when_block_narrower() {
+        // wblock < worig ⇒ left-justify + gap-pad the window tail to worig (still a
+        // width-preserving SetCells). Both rows' single residue "C" lands at c0.
+        let mut ds = Dataset::from_records(&[rec("a", "A-C-T"), rec("b", "A--CT")]);
+        let mut history = align_core::EditStack::new();
+        // Rows 0,1, window cols 1..=3 (worig 3). Residues: a "C", b "C" ⇒ wblock 1.
+        let aligned = vec![b"C".to_vec(), b"C".to_vec()];
+        let cmd = placement_cmd(block_align_cmd(&ds, &[0, 1], 1, 3, &aligned, false));
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 5); // preserved
+        assert_eq!(ds.alignment.rows[0].gapped, b"AC--T");
+        assert_eq!(ds.alignment.rows[1].gapped, b"AC--T");
+        assert_eq!(degapped(&ds, 0), b"ACT");
+        assert_eq!(degapped(&ds, 1), b"ACT");
+    }
+
+    #[test]
+    fn block_align_grow_inserts_columns_and_undo_restores() {
+        // wblock > worig + Grow ⇒ SpliceRows: selected rows replace their window with
+        // the wider block; the non-selected row gets a gap column at the block's right
+        // edge. Every row grows by g=1 ⇒ still rectangular; undo restores width.
+        let mut ds = Dataset::from_records(&[rec("a", "ACGT"), rec("b", "ATGC"), rec("c", "GGGG")]);
+        let mut history = align_core::EditStack::new();
+        // Rows 0,1, window cols 1..=2 (worig 2). Residues a "CG", b "TG".
+        let aligned = vec![b"C-G".to_vec(), b"T-G".to_vec()]; // wblock 3, g 1
+        let cmd = placement_cmd(block_align_cmd(&ds, &[0, 1], 1, 2, &aligned, true));
+        assert!(matches!(cmd, EditCmd::SpliceRows { .. }));
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 5); // grew by g=1
+        assert_eq!(ds.alignment.rows[0].gapped, b"AC-GT");
+        assert_eq!(ds.alignment.rows[1].gapped, b"AT-GC");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGG-G"); // gap inserted at c1+1
+                                                           // Every row is width 5 (rectangular) and residues are unchanged.
+        for r in 0..3 {
+            assert_eq!(ds.alignment.rows[r].gapped.len(), 5);
+        }
+        assert_eq!(degapped(&ds, 0), b"ACGT");
+        assert_eq!(degapped(&ds, 1), b"ATGC");
+        assert_eq!(degapped(&ds, 2), b"GGGG");
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACGT");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGGG");
+    }
+
+    #[test]
+    fn block_align_grow_at_right_edge_inserts_at_row_end() {
+        // Right-edge window (c1 == width-1): the non-selected row's gap column is
+        // inserted at col == width (an append). Must not panic / go out of bounds.
+        let mut ds = Dataset::from_records(&[rec("a", "ACG"), rec("b", "ATG"), rec("c", "GGG")]);
+        let mut history = align_core::EditStack::new();
+        // Rows 0,1, window cols 1..=2 (c1 == 2 == width-1, worig 2). Residues a "CG", b "TG".
+        let aligned = vec![b"C-G".to_vec(), b"T-G".to_vec()]; // wblock 3, g 1, insert_col == 3 == width
+        let cmd = placement_cmd(block_align_cmd(&ds, &[0, 1], 1, 2, &aligned, true));
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 4);
+        assert_eq!(ds.alignment.rows[0].gapped, b"AC-G");
+        assert_eq!(ds.alignment.rows[1].gapped, b"AT-G");
+        assert_eq!(ds.alignment.rows[2].gapped, b"GGG-"); // appended at the end
+    }
+
+    #[test]
+    fn block_align_fit_all_rows_preserves_width_no_shrink() {
+        // Cols-mode (every row selected) + Fit gap-pads to worig — it does NOT shrink
+        // the matrix the way whole-row msa_align's all-selected path does. This pins
+        // the intentional divergence (Fit is width-preserving by definition).
+        let mut ds = Dataset::from_records(&[rec("a", "AC-GT"), rec("b", "AT-GT")]);
+        let mut history = align_core::EditStack::new();
+        // All rows [0,1], window cols 1..=3 (worig 3). Residues a "CG", b "TG" ⇒ wblock 2.
+        let aligned = vec![b"CG".to_vec(), b"TG".to_vec()];
+        let cmd = placement_cmd(block_align_cmd(&ds, &[0, 1], 1, 3, &aligned, false));
+        history.apply(&mut ds, cmd).unwrap();
+        assert_eq!(ds.alignment.width, 5); // NOT shrunk to 4
+        assert_eq!(ds.alignment.rows[0].gapped, b"ACG-T");
+        assert_eq!(ds.alignment.rows[1].gapped, b"ATG-T");
+    }
+
+    #[test]
+    fn block_align_seam_real_aligner_is_lossless() {
+        // The one test that drives the REAL seam end-to-end — window extraction →
+        // actual `pairwise` → `block_align_cmd` → apply — not a hand-crafted block.
+        // This is what proves extraction + dispatch + reconcile compose correctly;
+        // the other tests pin the reconcile branches with synthetic input. Assert
+        // losslessness against the real aligner's output (whatever gaps it chooses).
+        let mut ds = Dataset::from_records(&[rec("a", "AC-GTA"), rec("b", "A-C-TA")]);
+        let mut history = align_core::EditStack::new();
+        let before0 = degapped(&ds, 0);
+        let before1 = degapped(&ds, 1);
+
+        // Sub-column window cols 1..=4 (worig 4). Row a window "C-GT" ⇒ "CGT",
+        // row b window "-C-T" ⇒ "CT" — different lengths, so the aligner must gap.
+        let (c0, c1) = (1, 4);
+        let worig = c1 - c0 + 1;
+        let seqs = block_window_seqs(&ds, &[0, 1], c0, c1);
+        assert_eq!(seqs, vec![b"CGT".to_vec(), b"CT".to_vec()]);
+
+        let alphabet = dataset_alphabet(&ds);
+        let matrix = SubstitutionMatrix::default_for(alphabet);
+        let scoring = Scoring::default_for(alphabet);
+        let r = pairwise(&seqs[0], &seqs[1], &matrix, AlignMode::Global, scoring);
+        assert!(
+            r.aligned_a.len() <= worig,
+            "widen the fixture if the block overflows"
+        );
+
+        let cmd = placement_cmd(block_align_cmd(
+            &ds,
+            &[0, 1],
+            c0,
+            worig,
+            &[r.aligned_a, r.aligned_b],
+            false,
+        ));
+        history.apply(&mut ds, cmd).unwrap();
+
+        // Lossless: every row's ungapped residues are byte-identical to before.
+        assert_eq!(degapped(&ds, 0), before0);
+        assert_eq!(degapped(&ds, 1), before1);
+        // Out-of-window cells (col 0 and col 5) are untouched; width preserved (Fit).
+        assert_eq!(ds.alignment.width, 6);
+        assert_eq!(ds.alignment.rows[0].gapped[0], b'A');
+        assert_eq!(ds.alignment.rows[0].gapped[5], b'A');
+        assert_eq!(ds.alignment.rows[1].gapped[0], b'A');
+        assert_eq!(ds.alignment.rows[1].gapped[5], b'A');
+
+        history.undo(&mut ds).unwrap();
+        assert_eq!(ds.alignment.rows[0].gapped, b"AC-GTA");
+        assert_eq!(ds.alignment.rows[1].gapped, b"A-C-TA");
+    }
+
+    #[test]
+    fn block_align_fit_overflow_makes_no_edit() {
+        // wblock > worig + Fit ⇒ Overflow(g), no edit. The command turns this into a
+        // "needs N more cols" message; here we pin the reconcile decision + count.
+        let ds = Dataset::from_records(&[rec("a", "AC"), rec("b", "GT"), rec("c", "TT")]);
+        // Rows 0,1, window cols 0..=1 (worig 2), a wider block ⇒ overflow by 1.
+        let aligned = vec![b"A-C".to_vec(), b"G-T".to_vec()]; // wblock 3
+        match block_align_cmd(&ds, &[0, 1], 0, 2, &aligned, false) {
+            BlockPlacement::Overflow(by) => assert_eq!(by, 1),
+            _ => panic!("expected a Fit overflow"),
+        }
     }
 }
