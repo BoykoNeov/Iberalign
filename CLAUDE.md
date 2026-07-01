@@ -631,17 +631,22 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   node + 16 dom; the +12 regression tests are node — they live in `colors.test.ts`) +
   typecheck + build green. Detail in
   `docs/plans/custom-colors-{plan,context,tasks}.md`.
-- **DNA/RNA ↔ Protein separate views + translation — DESIGN-ONLY (no code yet,
-  2026-07-01).** User wants protein and nucleotide as separate switchable views, with a
-  DNA/RNA view able to **translate** into a protein view (genetic-code picker deferred →
-  default NCBI table 1). **Two forks are OPEN pending a user decision:** (Q1) is a
-  translated protein view a real **Rust-owned `Alignment`** (editable/alignable, matches
-  "Rust owns truth") or a **frontend read-only projection** (cheap v1, matches the "click
-  converts it" phrasing)? (Q2) translate a **gapped** DNA alignment by **degap→translate**
-  per sequence (rec) or codon-through-the-alignment? Settled: translation is pure
-  `align-core` engine work (`translate.rs` + a 64-codon `GeneticCode`). The "no aligning
-  DNA vs protein" constraint is already largely satisfied (each alignment infers one
-  alphabet). Detail in `docs/plans/dna-protein-view-plan.md`.
+- **DNA/RNA ↔ Protein separate views + translation — DESIGN-ONLY (no code yet); both
+  forks DECIDED 2026-07-01, ready to phase on go-ahead.** User wants protein and
+  nucleotide as separate switchable views, with a DNA/RNA view able to **translate** into a
+  protein view (genetic-code picker deferred → default NCBI table 1). **Fork decisions:**
+  **(Q1) → Option B now, A later** — v1 is a **frontend read-only projection** (derive a
+  protein render-buffer from the DNA buffer; look-only, DNA stays sole source of truth so
+  the invariant holds for a read-only view); a **Rust-owned editable/alignable
+  `Alignment`** is the future graduation. **(Q2) → selection-scoped, both gap modes** —
+  translate **only the user-selected parts** (rows + column region), NOT the whole
+  alignment; include **both** gap modes as choosable (**degap→translate** default,
+  **codon-through-the-alignment** toggle; codon over a gap → `X`/`-`). Settled: translation
+  is pure `align-core` engine work (`translate.rs` + a 64-codon `GeneticCode`); the seam is
+  a **stateless** IPC `translate_block` command (no AppState rework, no new capability). The
+  "no aligning DNA vs protein" constraint is already largely satisfied (each alignment
+  infers one alphabet). Phasing: engine `translate` → `translate_block` seam → view UI →
+  later the code picker + Q1=A graduation. Detail in `docs/plans/dna-protein-view-plan.md`.
 
 ## Dev-docs
 
