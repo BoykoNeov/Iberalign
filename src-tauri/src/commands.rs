@@ -4,8 +4,9 @@
 
 use crate::state::AppState;
 use align_core::{
-    pairwise, progressive_align, AlignMode, Alphabet, CellWrite, Dataset, EditCmd, MsaEngine,
-    RawRecord, RowData, RowSplice, Scoring, SeqId, SubstitutionMatrix,
+    pairwise, progressive_align, translate, AlignMode, Alphabet, CellWrite, Dataset, EditCmd,
+    GeneticCode, MsaEngine, RawRecord, RowData, RowSplice, Scoring, SeqId, SubstitutionMatrix,
+    TranslateMode,
 };
 use serde::Serialize;
 use std::sync::Mutex;
@@ -1367,6 +1368,123 @@ pub async fn block_align(
     })
 }
 
+// ---- translation (DNA/RNA → protein, read-only view) -----------------------
+//
+// A STATELESS seam: unlike every edit command, `translate_block` never mutates the
+// dataset or the history — it reads the current alignment (immutable borrow) and
+// returns the translated protein rows for a selected block. The frontend shows
+// them as a read-only protein view (Q1=B: the DNA alignment stays the single
+// source of truth; the protein view is a derived projection). Translation itself
+// stays in the pure `align-core::translate` engine — no biology here.
+
+/// Result of [`translate_block`]: the translated protein rows (one per selected
+/// row, in the SAME order they were requested — an index-paired projection, so
+/// order and duplicates are meaningful, unlike the set-normalizing align commands)
+/// and their common `width`. Rows are trailing-gap-padded to `width` so the block
+/// is rectangular (directly a protein render buffer). Amino-acid output is ASCII,
+/// so the bytes ride as `String`s: a `String` serializes 1:1 over IPC, sidestepping
+/// the `number[]` bloat that forces the big render buffer onto a binary transport.
+#[derive(Serialize)]
+pub struct TranslateBlockDto {
+    pub rows: Vec<String>,
+    pub width: usize,
+}
+
+/// Translate the selected `rows`' residues WITHIN the column window `[c0, c1]` to
+/// protein, returning one rectangular (trailing-gap-padded) row per input row in
+/// input order. Both modes read the row's GAPPED window `[c0..=c1]`: [`TranslateMode::Degap`]
+/// filters the gaps internally (the clean windowed ORF), [`TranslateMode::CodonThrough`]
+/// reads the columns three-at-a-time (all-gap codon → `-`, gap-spanning → `X`).
+/// Codon FRAMING starts at the window's left edge `c0`, so an off-boundary window
+/// is frame-shifted — by design (the user picks a codon-aligned region), not a bug.
+///
+/// Reads `ds.alignment.rows[row]` directly, so callers MUST have validated the row
+/// indices in bounds first (mirrors [`block_window_seqs`]). The column window is
+/// guarded here: an empty alignment, a `c0` past the right edge, or a window under
+/// three columns yields empty rows (width 0) — a "nothing to translate" result, not
+/// a panic. `c1` is clamped to the last column.
+fn translate_block_rows(
+    ds: &Dataset,
+    rows: &[usize],
+    c0: usize,
+    c1: usize,
+    mode: TranslateMode,
+    code: &GeneticCode,
+) -> Vec<Vec<u8>> {
+    let width = ds.alignment.width;
+    // Empty window (nothing loaded, a stale `c0` past the edge, or `c0 > c1`) ⇒ one
+    // empty row each, keeping the output paired 1:1 with the input rows.
+    if width == 0 || c0 >= width {
+        return vec![Vec::new(); rows.len()];
+    }
+    let c1 = c1.min(width - 1);
+    if c0 > c1 {
+        return vec![Vec::new(); rows.len()];
+    }
+    let mut out: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|&row| translate(&ds.alignment.rows[row].gapped[c0..=c1], code, mode))
+        .collect();
+    // Pad rectangular: Degap rows are ragged (⌊ungapped/3⌋ varies per row), so pad
+    // to the widest with trailing gaps; CodonThrough rows are already equal width.
+    let w = out.iter().map(|r| r.len()).max().unwrap_or(0);
+    for r in &mut out {
+        r.resize(w, b'-');
+    }
+    out
+}
+
+/// Translate a selected block of a DNA/RNA alignment to protein and return the
+/// rows — READ-ONLY (the DNA alignment is untouched; see the module note). `mode`
+/// is `"degap"` (strip gaps, translate the clean ORF) or `"codon"` (codon-through
+/// the columns, keeping 1:3 column correspondence). `code` is an NCBI translation-
+/// table id (default 1/Standard — the only table today). `rows` are alignment-row
+/// indices (order preserved); the column window is `[c0, c1]`. Errors if nothing is
+/// loaded, a row is out of bounds, or the mode/code id is unknown.
+#[tauri::command]
+pub async fn translate_block(
+    rows: Vec<usize>,
+    c0: usize,
+    c1: usize,
+    mode: String,
+    code: Option<u8>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<TranslateBlockDto, String> {
+    let mode = match mode.as_str() {
+        "degap" => TranslateMode::Degap,
+        "codon" => TranslateMode::CodonThrough,
+        other => return Err(format!("unknown translate mode '{other}'")),
+    };
+    let code_id = code.unwrap_or(1);
+    let code = GeneticCode::by_id(code_id).ok_or_else(|| {
+        format!("unknown genetic code table '{code_id}' (only 1/Standard available)")
+    })?;
+
+    let guard = state
+        .lock()
+        .map_err(|_| "state lock poisoned".to_string())?;
+    let ds = guard
+        .dataset
+        .as_ref()
+        .ok_or_else(|| "no alignment loaded".to_string())?;
+
+    // Validate row indices in bounds (the helper indexes rows directly). Order and
+    // duplicates are preserved — this is an index-paired projection, not a set op.
+    let n = ds.alignment.num_rows();
+    if let Some(&bad) = rows.iter().find(|&&r| r >= n) {
+        return Err(format!("row {bad} out of bounds (alignment has {n} rows)"));
+    }
+
+    let translated = translate_block_rows(ds, &rows, c0, c1, mode, &code);
+    let width = translated.first().map(|r| r.len()).unwrap_or(0);
+    let rows = translated
+        .into_iter()
+        // Safe (not lossy): amino-acid output is ASCII by construction.
+        .map(|r| String::from_utf8(r).expect("amino-acid output is ASCII"))
+        .collect();
+    Ok(TranslateBlockDto { rows, width })
+}
+
 /// Undo the most recent edit; returns the post-edit render buffer (empty when
 /// there is nothing to undo). Errors if nothing is loaded.
 #[tauri::command]
@@ -2265,5 +2383,70 @@ mod tests {
             BlockPlacement::Overflow(by) => assert_eq!(by, 1),
             _ => panic!("expected a Fit overflow"),
         }
+    }
+
+    // ---- translate_block_rows ----------------------------------------------
+
+    #[test]
+    fn translate_block_degap_translates_and_pads_ragged() {
+        // Row a: ATG(M) AAA(K) = "MK"; row b ("ATG", padded to "ATG---") degaps to
+        // "ATG" → "M". Ragged output pads to the widest (2) with a trailing gap.
+        let ds = Dataset::from_records(&[rec("a", "ATGAAA"), rec("b", "ATG")]);
+        let code = GeneticCode::standard();
+        let out = translate_block_rows(&ds, &[0, 1], 0, 5, TranslateMode::Degap, &code);
+        assert_eq!(out, vec![b"MK".to_vec(), b"M-".to_vec()]);
+    }
+
+    #[test]
+    fn translate_block_modes_differ_on_a_gapped_row() {
+        // "AT-AAA": CodonThrough reads columns AT-|AAA → X|K = "XK"; Degap strips
+        // the gap first → "ATAAA" → ATA(I), trailing "AA" dropped → "I". Proves the
+        // two modes are not the same code path on gapped input.
+        let ds = Dataset::from_records(&[rec("a", "AT-AAA")]);
+        let code = GeneticCode::standard();
+        let through = translate_block_rows(&ds, &[0], 0, 5, TranslateMode::CodonThrough, &code);
+        assert_eq!(through, vec![b"XK".to_vec()]);
+        let degap = translate_block_rows(&ds, &[0], 0, 5, TranslateMode::Degap, &code);
+        assert_eq!(degap, vec![b"I".to_vec()]);
+    }
+
+    #[test]
+    fn translate_block_window_scopes_to_columns() {
+        // Only columns 3..=5 ("ATG") are translated, not the flanking bases.
+        let ds = Dataset::from_records(&[rec("a", "AAAATGGGG")]);
+        let code = GeneticCode::standard();
+        let out = translate_block_rows(&ds, &[0], 3, 5, TranslateMode::Degap, &code);
+        assert_eq!(out, vec![b"M".to_vec()]);
+    }
+
+    #[test]
+    fn translate_block_preserves_input_row_order() {
+        // AAA→K, GGG→G, TTT→F; requesting rows [2, 0, 1] returns [F, K, G] — the
+        // projection is index-paired, so order is NOT normalized (unlike msa_align).
+        let ds = Dataset::from_records(&[rec("a", "AAA"), rec("b", "GGG"), rec("c", "TTT")]);
+        let code = GeneticCode::standard();
+        let out = translate_block_rows(&ds, &[2, 0, 1], 0, 2, TranslateMode::Degap, &code);
+        assert_eq!(out, vec![b"F".to_vec(), b"K".to_vec(), b"G".to_vec()]);
+    }
+
+    #[test]
+    fn translate_block_short_window_and_past_edge_yield_empty() {
+        let ds = Dataset::from_records(&[rec("a", "ATGAAA")]); // width 6
+        let code = GeneticCode::standard();
+        // Under three columns → nothing to translate (one empty row, paired 1:1).
+        let short = translate_block_rows(&ds, &[0], 0, 1, TranslateMode::CodonThrough, &code);
+        assert_eq!(short, vec![Vec::<u8>::new()]);
+        // c0 past the right edge → empty, not a panic.
+        let past = translate_block_rows(&ds, &[0], 6, 8, TranslateMode::Degap, &code);
+        assert_eq!(past, vec![Vec::<u8>::new()]);
+    }
+
+    #[test]
+    fn translate_block_clamps_c1_past_edge() {
+        // A stale c1 (99) clamps to the last column (5), so the full row translates.
+        let ds = Dataset::from_records(&[rec("a", "ATGAAA")]);
+        let code = GeneticCode::standard();
+        let out = translate_block_rows(&ds, &[0], 0, 99, TranslateMode::Degap, &code);
+        assert_eq!(out, vec![b"MK".to_vec()]);
     }
 }

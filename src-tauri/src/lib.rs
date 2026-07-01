@@ -28,6 +28,7 @@ pub fn run() {
             commands::pairwise_align,
             commands::msa_align,
             commands::block_align,
+            commands::translate_block,
             commands::undo_edit,
             commands::redo_edit
         ])

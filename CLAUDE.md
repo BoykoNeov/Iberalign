@@ -631,8 +631,30 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   node + 16 dom; the +12 regression tests are node — they live in `colors.test.ts`) +
   typecheck + build green. Detail in
   `docs/plans/custom-colors-{plan,context,tasks}.md`.
-- **DNA/RNA ↔ Protein separate views + translation — DESIGN-ONLY (no code yet); both
-  forks DECIDED 2026-07-01, ready to phase on go-ahead.** User wants protein and
+- **DNA/RNA ↔ Protein separate views + translation — Phases 1 (engine + CLI, `f4659bb`)
+  + 2 (`translate_block` IPC seam) DONE + green 2026-07-01; Phases 3–5 pending.**
+  **Phase 2** is the stateless read-only seam: `commands.rs` pure helper
+  `translate_block_rows(ds, rows, c0, c1, mode, code) -> Vec<Vec<u8>>` (the tested core) +
+  thin `#[tauri::command] translate_block(rows, c0, c1, mode: String, code: Option<u8>) ->
+  TranslateBlockDto { rows: Vec<String>, width }`. Reads the dataset IMMUTABLY (no
+  mutation, no history — "stateless"); returns translated protein rows so the frontend can
+  show a read-only projection (Q1=B, DNA stays the source of truth). Advisor-reviewed
+  decisions: **both modes read the row's GAPPED window `[c0..=c1]`** (Degap filters gaps
+  internally, CodonThrough reads columns — simpler than the CLI's two-source split, and
+  correct); codon framing starts at `c0` (off-boundary ⇒ frame-shifted by design); output
+  rows **trailing-gap-padded rectangular** in the helper (Degap is ragged → pad to widest);
+  **row ORDER preserved** (no sort/dedup — index-paired projection, unlike the align
+  commands); `Vec<String>` transport (amino acids ASCII → 1:1 serialize, `from_utf8` safe,
+  no binary `Response`); helper edge cases (empty aln / `c0` past edge / <3-col window →
+  empty rows width 0, `c1` clamped) + OOB rows error in the command; **no new capability**.
+  Frontend wrapper in a NEW `src/ipc/translate.ts` (kept out of `ipc/edit.ts`, whose
+  contract is reversible mutations). Registered in `lib.rs`. 6 new iberalign tests (49
+  total); typecheck + build + clippy `-D warnings` + fmt clean. **Next: Phase 3** (wire the
+  current selection → the translate action; degap default, codon toggle). The rest of the
+  original design (forks, Q1/Q2) is unchanged below.
+
+- **DNA/RNA ↔ Protein — original design decisions (forks Q1/Q2, DECIDED 2026-07-01).**
+  User wants protein and
   nucleotide as separate switchable views, with a DNA/RNA view able to **translate** into a
   protein view (genetic-code picker deferred → default NCBI table 1). **Fork decisions:**
   **(Q1) → Option B now, A later** — v1 is a **frontend read-only projection** (derive a

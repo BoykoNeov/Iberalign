@@ -1,7 +1,38 @@
 # DNA/RNA ↔ Protein separate views + translation — design plan
 
-**Status: Phase 1 (engine + CLI) DONE + green 2026-07-01. Both forks DECIDED
-2026-07-01 (see `## Fork decisions`). Phases 2–5 pending.** Session 2026-07-01.
+**Status: Phases 1 (engine + CLI) + 2 (IPC seam) DONE + green 2026-07-01. Both
+forks DECIDED 2026-07-01 (see `## Fork decisions`). Phases 3–5 pending.** Session
+2026-07-01.
+
+## Phase 2 — `translate_block` IPC seam (DONE, green)
+
+A **stateless** read-only command (no `AppState` mutation, no history entry) —
+`src-tauri/src/commands.rs`: pure helper **`translate_block_rows(ds, rows, c0, c1,
+mode, code) -> Vec<Vec<u8>>`** (the tested core) + the thin
+`#[tauri::command] translate_block(rows, c0, c1, mode: String, code: Option<u8>)
+-> TranslateBlockDto { rows: Vec<String>, width }`. Reads the current dataset
+immutably (like `get_render_buffer`); returns the translated protein rows so the
+frontend can display a read-only projection (Q1=B — DNA stays the source of truth).
+
+Key decisions (advisor-reviewed): **both modes read the row's GAPPED window
+`[c0..=c1]`** — `Degap` filters gaps internally (windowed ORF), `CodonThrough`
+reads the columns (simpler than the CLI's two-source split, and correct); codon
+FRAMING starts at `c0` (off-boundary window ⇒ frame-shifted by design). Output rows
+are **trailing-gap-padded rectangular** in the helper (Degap is ragged; pad to the
+widest), so the DTO is directly a render buffer. **Row ORDER preserved** — no
+sort/dedup (index-paired projection, unlike the set-normalizing align commands).
+`Vec<String>` transport (amino acids are ASCII → 1:1 serialize, `String::from_utf8`
+safe — no binary `Response` needed). Edge cases in the helper: empty alignment /
+`c0` past edge / window < 3 cols → empty rows (width 0), `c1` clamped; OOB row
+indices error in the command (the helper indexes rows directly, like
+`block_window_seqs`). **No new capability** (custom app commands aren't gated).
+Frontend wrapper in a NEW **`src/ipc/translate.ts`** (`translateBlock` +
+`TranslateMode`/`TranslateBlockResult`) — kept out of `ipc/edit.ts`, whose contract
+is reversible mutations returning the post-edit buffer. Registered in `lib.rs`. 6
+new iberalign tests (degap pad-ragged / modes-differ-on-gapped-row / window-scoping
+/ order-preserved / short-window+past-edge-empty / c1-clamp); iberalign 49,
+typecheck + build + clippy `-D warnings` + fmt clean. **Next: Phase 3** (wire the
+current selection → the translate action; degap default, codon toggle).
 
 ## Phase 1 — `align-core::translate` + CLI (DONE, green)
 
