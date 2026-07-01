@@ -225,6 +225,20 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   and `COLORBLIND_SCHEME` (CVD-safe) remain selectable via the registry. Glyph ink
   is a single black (`GLYPH_INK`) for every residue/scheme — `inkStyleFor` is now a
   uniform table. Asserted in `colors.test.ts` (`DEFAULT_SCHEME_ID === "vivid"`).
+- **Per-residue amino-acid coloring — committed `2e948fe`, pushed (2026-07-01).**
+  Protein no longer shares DNA's 4-color scheme: all 20 amino acids get a distinct
+  color. A/C/G/T keep their existing nucleotide colors (Ala/Cys/Gly/Thr reuse the
+  letter); the other 16 come from a shared `AMINO_ACID_EXTRA` table in
+  `render/colors.ts`, merged FIRST into each scheme's `residues` so the nucleotide
+  entries win. **DNA-safe** (DNA never contains non-ACGT letters; coloring routes
+  uniformly through `scheme.fillStyleFor`, no alphabet switch) and benefits protein
+  consensus/conservation fills too (`coloring.ts` uses the same path). Palette was
+  machine-optimized (hill-climb, min pairwise RGB distance ≈64) subject to a
+  **Rec.601 luma floor ≥105** (the darkest shipped nucleotide, vivid T-red) so the
+  always-black glyph stays legible. `colors.test.ts` pins per-scheme luma-floor (over
+  the 16 new letters only — A/C/G/T can be legitimately darker) + full-20 pairwise
+  distinctness. Colorblind caveat: nucleotides stay CVD-safe, but a 20-color palette
+  can't be fully CVD-distinct.
 - **Paste (Batch C) — code complete + green; GUI smoke PASSED (2026-06-24, user "all
   works").** Clipboard → alignment, in three landed slices on the Batch-B edit foundation:
   **C1** overwrite (clamp→later grow), **C2** insert shift-only (the first width-CHANGING
@@ -537,7 +551,7 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   KAlign + decide release-shipping (kalign-on release build). **Deferred:** pure-Rust POA
   (dropped per user — build proven so the seam-prover was redundant); block/sub-area align.
   Detail in `docs/plans/extern-aligner-{plan,context,tasks}.md`.
-- **Block / sub-area align — code complete + green; GUI smoke pending (2026-07-01).**
+- **Block / sub-area align — code complete + green; GUI smoke PASSED (2026-07-01).**
   The M3-deferred "align only this region" thread, built per the 2026-06-30 design
   (`docs/plans/block-align-*`). "Align selected sequences" now branches on the selection's
   COLUMN extent: a **full-width** selection (`c0==0 && c1==width-1`) keeps the whole-row
@@ -566,11 +580,13 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   cols-mode all-rows Fit no-shrink / Fit-overflow no-edit / window extraction / a **seam
   test driving the REAL `pairwise` end-to-end** — advisor-flagged, since the other 7 feed
   synthetic aligned blocks); align-core 54 / iberalign 43 / 295 vitest / clippy `-D warnings`
-  + fmt + typecheck + build green. **Only
-  the GUI smoke remains** (sub-column re-aligns just the window + neighbors untouched + Ctrl+Z;
-  Fit slack packs / tight refuses; Grow inserts; 3+/KAlign; full-width regression;
-  all-gap window). Multi-select (non-adjacent rows) stays a separate gated milestone. Detail
-  in `docs/plans/block-align-{plan,context,tasks}.md`.
+  + fmt + typecheck + build green. **GUI smoke PASSED (2026-07-01):** all 6 items confirmed
+  (sub-column re-aligns just the window + neighbors untouched + Ctrl+Z; Fit slack packs /
+  tight refuses; Grow inserts; 3+/KAlign; full-width regression; all-gap window). Item 5
+  (full-width regression) is read from the STATUS READOUT — full-width says `N sequences ·
+  L cols` (plain whole-row path), not `Block-aligned cols …`. Smoke fixtures added:
+  `fixtures/smoke-block-{dna,slack}.fasta`. Multi-select (non-adjacent rows) stays a separate
+  gated milestone. Detail in `docs/plans/block-align-{plan,context,tasks}.md`.
 
 ## Dev-docs
 

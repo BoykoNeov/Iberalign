@@ -14,7 +14,7 @@ session; multi-select is a later, explicitly-gated milestone.
 - [ ] Update `m3-tasks.md` "Deferred" section to point at these docs (optional
       tidy; do when block align actually lands)
 
-## Block / sub-area align — CODE COMPLETE + GREEN (2026-07-01); GUI smoke pending
+## Block / sub-area align — CODE COMPLETE + GREEN (2026-07-01); GUI smoke PASSED (2026-07-01)
 
 ### Engine / command (`src-tauri`, reusing `align-core`) ✅
 - [x] `block_align(rows, c0, c1, grow, engine?, matrix?, gap_open?, gap_extend?)`
@@ -55,16 +55,23 @@ session; multi-select is a later, explicitly-gated milestone.
       Fit-overflow → warn "needs N more cols — widen or switch Block overflow to Grow"
 - [x] typecheck + 295 vitest + build green (clippy `-D warnings` + fmt clean; 43 iberalign tests)
 
-### GUI smoke (next session, after code-complete)
-- [ ] Sub-column select 2 rows → Align → only the window re-aligns; cells outside
+### GUI smoke (2026-07-01) — PASSED (user "all confirmed except number 5"; item 5 reconfirmed after clarifying where to look)
+- [x] Sub-column select 2 rows → Align → only the window re-aligns; cells outside
       `[c0,c1]` and other rows unchanged; `Ctrl+Z` restores
-- [ ] Fit (default): a window with slack packs in place (no width change); a tight
+- [x] Fit (default): a window with slack packs in place (no width change); a tight
       window that overflows → refusal message, nothing changes
-- [ ] Grow: the same overflow case inserts columns; the rest of the alignment
+- [x] Grow: the same overflow case inserts columns; the rest of the alignment
       shifts but stays mutually aligned; `Ctrl+Z` restores
-- [ ] 3+ rows block align (progressive); KAlign engine; protein vs DNA defaults
-- [ ] Full-width selection still does whole-row align (regression check)
-- [ ] All-gap window → "nothing to align"
+- [x] 3+ rows block align (progressive); KAlign engine; protein vs DNA defaults
+- [x] Full-width selection still does whole-row align (regression check) — item 5;
+      the OBSERVABLE difference is the readout wording: full-width says
+      `N sequences · L cols` (plain whole-row path), NOT `Block-aligned cols …`
+- [x] All-gap window → "nothing to align"
+
+Smoke fixtures (untracked until this batch): `fixtures/smoke-block-dna.fasta`
+(width 16; b1/b2 offset ACGT motif → block width 12, overflows a 10-wide window
+by 2 → Fit-refusal / Grow / 3+/KAlign) + `fixtures/smoke-block-slack.fasta`
+(width 14; g1/g2 windows degap to ACG → Fit packs to 3; g3/g4 all-gap → nothing to align).
 
 ## Non-adjacent / arbitrary N≥2 multi-select (LATER MILESTONE — gated)
 
