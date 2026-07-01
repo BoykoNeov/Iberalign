@@ -627,8 +627,9 @@ cold-launch stall (no orphans), exclude `target\` from Defender:
   Both variants share the public `id` (glyph atlas keys on it, but inks are uniform
   `GLYPH_INK` in both, so no mis-cache). `Grid` picks the variant by `activeKey` before
   `schemeWithOverrides`. Regression test in `colors.test.ts` (ambiguity → grey ≠ amino
-  for nucleotide; → amino for protein; A/C/G/T/U identical in both). **342 vitest** (314
-  node + 28 dom) + typecheck + build green. Detail in
+  for nucleotide; → amino for protein; A/C/G/T/U identical in both). **342 vitest** (326
+  node + 16 dom; the +12 regression tests are node — they live in `colors.test.ts`) +
+  typecheck + build green. Detail in
   `docs/plans/custom-colors-{plan,context,tasks}.md`.
 - **DNA/RNA ↔ Protein separate views + translation — DESIGN-ONLY (no code yet,
   2026-07-01).** User wants protein and nucleotide as separate switchable views, with a
